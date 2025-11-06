@@ -12,5 +12,3 @@ Placeholder for documenting project decisions and usage instructions as the trac
 - Activate the virtual environment: `source .venv/bin/activate`
 - Extend `cli.py` with command definitions as features are implemented
 - Add persistent storage helpers in `storage.py` and analysis routines in `analysis.py`
-
-Update this README routinely whenever new decisions or workflows are introduced.
