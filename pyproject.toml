@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "javelin-tracker"
+version = "0.1.0"
+description = "CLI utilities for tracking javelin training sessions."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "Uday", email = "uday@example.com" }
+]
+dependencies = [
+  "typer>=0.9",
+  "pandas>=2.0",
+  "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6"
+]
+
+[project.scripts]
+javelin = "javelin_tracker.cli:app"
+
+[tool.setuptools]
+packages = ["javelin_tracker"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
