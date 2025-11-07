@@ -1,0 +1,32 @@
+{
+  "application": "javelin-tracker",
+  "version": "0.1.0",
+  "exported_at": "2025-11-07T05:54:57.505531+00:00",
+  "rows": 7,
+  "columns": [
+    "athlete",
+    "team",
+    "date",
+    "best_throw",
+    "throws",
+    "throws_count",
+    "rpe",
+    "duration_minutes",
+    "load",
+    "avg_throw",
+    "tags",
+    "notes",
+    "app_version",
+    "exported_at"
+  ],
+  "data_formats": [
+    "csv",
+    "parquet",
+    "json"
+  ],
+  "environment": {
+    "python_version": "3.12.12",
+    "javelin_tracker_data_dir": null,
+    "javelin_tracker_sessions_file": null
+  }
+}

@@ -1,0 +1,620 @@
+[
+  {
+    "date": "2025-10-11",
+    "best": 57.6,
+    "throws": [
+      57.4,
+      56.9,
+      57.9,
+      56.9,
+      57.6,
+      58.1
+    ],
+    "rpe": 5,
+    "duration_minutes": 36.7,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "tempo"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-alpha",
+    "athlete_hash": "ae58a2d0534e"
+  },
+  {
+    "date": "2025-10-12",
+    "best": 58.4,
+    "throws": [
+      58.8,
+      57.8,
+      57.9,
+      58.5,
+      58.9
+    ],
+    "rpe": 8,
+    "duration_minutes": 61.3,
+    "notes": "High winds, emphasised grip position.",
+    "tags": [
+      "release-angle",
+      "run-up"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-alpha",
+    "athlete_hash": "e651e04b7b99"
+  },
+  {
+    "date": "2025-10-13",
+    "best": 58.0,
+    "throws": [
+      58.0,
+      58.0,
+      58.2,
+      57.3,
+      58.0
+    ],
+    "rpe": 5,
+    "duration_minutes": 51.8,
+    "notes": "Active recovery with mobility.",
+    "tags": [
+      "run-up"
+    ],
+    "athlete": "athlete-003",
+    "team": "demo-team-alpha",
+    "athlete_hash": "aa26d023e5eb"
+  },
+  {
+    "date": "2025-10-14",
+    "best": 58.9,
+    "throws": [
+      59.2,
+      58.8,
+      59.4,
+      58.6,
+      58.4,
+      58.4,
+      59.2,
+      58.2
+    ],
+    "rpe": 6,
+    "duration_minutes": 58.6,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "lift",
+      "tempo"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-alpha",
+    "athlete_hash": "3dbe1ac123ae"
+  },
+  {
+    "date": "2025-10-15",
+    "best": 58.3,
+    "throws": [
+      58.6,
+      57.7,
+      58.2,
+      57.6,
+      58.4,
+      58.6
+    ],
+    "rpe": 8,
+    "duration_minutes": 70.5,
+    "notes": "Active recovery with mobility.",
+    "tags": [
+      "lift"
+    ],
+    "athlete": "athlete-003",
+    "team": "demo-team-bravo",
+    "athlete_hash": "d9d7554256d6"
+  },
+  {
+    "date": "2025-10-16",
+    "best": 58.6,
+    "throws": [
+      57.9,
+      57.9,
+      58.2,
+      58.8,
+      57.9,
+      58.8,
+      58.2,
+      58.6
+    ],
+    "rpe": 7,
+    "duration_minutes": 47.8,
+    "notes": "High winds, emphasised grip position.",
+    "tags": [
+      "lift",
+      "tempo"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-bravo",
+    "athlete_hash": "69daf1354533"
+  },
+  {
+    "date": "2025-10-17",
+    "best": 57.0,
+    "throws": [
+      56.9,
+      56.5,
+      56.6,
+      57.2,
+      56.8
+    ],
+    "rpe": 7,
+    "duration_minutes": 38.6,
+    "notes": "Strength block with reduced run-up.",
+    "tags": [
+      "tempo"
+    ],
+    "athlete": "athlete-003",
+    "team": "demo-team-bravo",
+    "athlete_hash": "8837501c9a9e"
+  },
+  {
+    "date": "2025-10-18",
+    "best": 59.5,
+    "throws": [
+      59.7,
+      60.1,
+      59.7,
+      59.2,
+      59.0,
+      58.8,
+      58.9
+    ],
+    "rpe": 5,
+    "duration_minutes": 35.5,
+    "notes": "Strength block with reduced run-up.",
+    "tags": [
+      "lift",
+      "release-angle"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-alpha",
+    "athlete_hash": "e6b8d2dfda8e"
+  },
+  {
+    "date": "2025-10-19",
+    "best": 58.0,
+    "throws": [
+      58.1,
+      57.6,
+      57.4,
+      58.4,
+      58.5,
+      58.1,
+      58.2
+    ],
+    "rpe": 7,
+    "duration_minutes": 75.5,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "tempo"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-bravo",
+    "athlete_hash": "106c8caf0c44"
+  },
+  {
+    "date": "2025-10-20",
+    "best": 58.2,
+    "throws": [
+      57.5,
+      57.5,
+      57.7,
+      57.6,
+      57.9,
+      57.5,
+      57.4,
+      57.6
+    ],
+    "rpe": 4,
+    "duration_minutes": 77.7,
+    "notes": "Strength block with reduced run-up.",
+    "tags": [
+      "run-up"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-bravo",
+    "athlete_hash": "18edbe996c1a"
+  },
+  {
+    "date": "2025-10-21",
+    "best": 58.8,
+    "throws": [
+      58.8,
+      58.7,
+      58.2,
+      58.7,
+      59.4,
+      58.7,
+      58.4
+    ],
+    "rpe": 5,
+    "duration_minutes": 39.6,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "lift"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-alpha",
+    "athlete_hash": "197cda6d0d7c"
+  },
+  {
+    "date": "2025-10-22",
+    "best": 57.1,
+    "throws": [
+      56.5,
+      57.1,
+      56.3,
+      57.0,
+      57.7,
+      57.5,
+      57.3
+    ],
+    "rpe": 6,
+    "duration_minutes": 58.3,
+    "notes": "Strength block with reduced run-up.",
+    "tags": [
+      "lift",
+      "release-angle"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-bravo",
+    "athlete_hash": "acdf45578cbd"
+  },
+  {
+    "date": "2025-10-23",
+    "best": 58.7,
+    "throws": [
+      59.0,
+      59.0,
+      58.9,
+      58.2,
+      58.6,
+      58.4
+    ],
+    "rpe": 4,
+    "duration_minutes": 79.5,
+    "notes": "High winds, emphasised grip position.",
+    "tags": [
+      "lift",
+      "tempo"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-alpha",
+    "athlete_hash": "186d362e8580"
+  },
+  {
+    "date": "2025-10-24",
+    "best": 58.1,
+    "throws": [
+      58.6,
+      57.8,
+      57.6,
+      57.6,
+      57.6,
+      57.6,
+      58.2
+    ],
+    "rpe": 8,
+    "duration_minutes": 72.8,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "lift",
+      "tempo"
+    ],
+    "athlete": "athlete-003",
+    "team": "demo-team-alpha",
+    "athlete_hash": "ef6c4e039f25"
+  },
+  {
+    "date": "2025-10-25",
+    "best": 59.9,
+    "throws": [
+      59.8,
+      59.3,
+      60.2,
+      59.6,
+      60.2,
+      60.5
+    ],
+    "rpe": 7,
+    "duration_minutes": 55.8,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "release-angle",
+      "run-up"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-alpha",
+    "athlete_hash": "962d8a981b6b"
+  },
+  {
+    "date": "2025-10-26",
+    "best": 56.9,
+    "throws": [
+      57.2,
+      56.3,
+      57.3,
+      57.5,
+      57.0,
+      56.6,
+      56.9,
+      56.3
+    ],
+    "rpe": 4,
+    "duration_minutes": 71.0,
+    "notes": "Strength block with reduced run-up.",
+    "tags": [
+      "release-angle",
+      "run-up"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-alpha",
+    "athlete_hash": "9dde7b1611b8"
+  },
+  {
+    "date": "2025-10-27",
+    "best": 56.4,
+    "throws": [
+      56.0,
+      55.9,
+      56.4,
+      56.0,
+      56.2,
+      55.8
+    ],
+    "rpe": 6,
+    "duration_minutes": 75.4,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "release-angle",
+      "tempo"
+    ],
+    "athlete": "athlete-003",
+    "team": "demo-team-alpha",
+    "athlete_hash": "715373b4b54c"
+  },
+  {
+    "date": "2025-10-28",
+    "best": 59.8,
+    "throws": [
+      59.9,
+      60.1,
+      59.2,
+      59.2,
+      59.9,
+      59.2
+    ],
+    "rpe": 4,
+    "duration_minutes": 49.7,
+    "notes": "Strength block with reduced run-up.",
+    "tags": [
+      "run-up",
+      "tempo"
+    ],
+    "athlete": "athlete-003",
+    "team": "demo-team-alpha",
+    "athlete_hash": "e2edfd88f2a9"
+  },
+  {
+    "date": "2025-10-29",
+    "best": 57.0,
+    "throws": [
+      57.3,
+      56.9,
+      57.0,
+      57.3,
+      57.5
+    ],
+    "rpe": 7,
+    "duration_minutes": 49.7,
+    "notes": "Strength block with reduced run-up.",
+    "tags": [
+      "lift",
+      "release-angle"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-bravo",
+    "athlete_hash": "5d5c09832bff"
+  },
+  {
+    "date": "2025-10-30",
+    "best": 59.1,
+    "throws": [
+      59.6,
+      59.5,
+      58.6,
+      58.9,
+      58.9,
+      58.8,
+      58.7
+    ],
+    "rpe": 5,
+    "duration_minutes": 54.3,
+    "notes": "High winds, emphasised grip position.",
+    "tags": [
+      "lift",
+      "release-angle"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-alpha",
+    "athlete_hash": "75fe324b7195"
+  },
+  {
+    "date": "2025-10-31",
+    "best": 56.8,
+    "throws": [
+      57.4,
+      56.3,
+      57.3,
+      56.6,
+      56.7,
+      57.4
+    ],
+    "rpe": 5,
+    "duration_minutes": 42.3,
+    "notes": "Strength block with reduced run-up.",
+    "tags": [
+      "tempo"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-bravo",
+    "athlete_hash": "799f47c998b0"
+  },
+  {
+    "date": "2025-11-01",
+    "best": 57.7,
+    "throws": [
+      57.9,
+      56.9,
+      57.7,
+      57.5,
+      56.9
+    ],
+    "rpe": 6,
+    "duration_minutes": 58.3,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "lift",
+      "run-up"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-alpha",
+    "athlete_hash": "a185ac27d9a1"
+  },
+  {
+    "date": "2025-11-02",
+    "best": 56.5,
+    "throws": [
+      55.8,
+      56.8,
+      56.1,
+      55.9,
+      56.3,
+      57.0,
+      56.8
+    ],
+    "rpe": 6,
+    "duration_minutes": 53.3,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "lift",
+      "tempo"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-bravo",
+    "athlete_hash": "8cfac51b1c98"
+  },
+  {
+    "date": "2025-11-03",
+    "best": 59.6,
+    "throws": [
+      59.4,
+      58.9,
+      60.1,
+      59.7,
+      59.9,
+      58.9
+    ],
+    "rpe": 5,
+    "duration_minutes": 38.0,
+    "notes": "Active recovery with mobility.",
+    "tags": [
+      "run-up",
+      "tempo"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-bravo",
+    "athlete_hash": "95c257a486e3"
+  },
+  {
+    "date": "2025-11-04",
+    "best": 60.2,
+    "throws": [
+      60.3,
+      59.5,
+      60.4,
+      60.7,
+      60.8,
+      59.8,
+      59.7
+    ],
+    "rpe": 6,
+    "duration_minutes": 63.3,
+    "notes": "High winds, emphasised grip position.",
+    "tags": [
+      "lift",
+      "release-angle"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-alpha",
+    "athlete_hash": "5856160f56c0"
+  },
+  {
+    "date": "2025-11-05",
+    "best": 57.6,
+    "throws": [
+      58.2,
+      56.9,
+      56.8,
+      57.5,
+      58.2
+    ],
+    "rpe": 8,
+    "duration_minutes": 56.4,
+    "notes": "Active recovery with mobility.",
+    "tags": [
+      "run-up",
+      "tempo"
+    ],
+    "athlete": "athlete-003",
+    "team": "demo-team-bravo",
+    "athlete_hash": "4004ac597109"
+  },
+  {
+    "date": "2025-11-06",
+    "best": 58.5,
+    "throws": [
+      59.1,
+      58.1,
+      58.0,
+      58.0,
+      58.0,
+      58.9,
+      58.7,
+      57.9
+    ],
+    "rpe": 6,
+    "duration_minutes": 79.2,
+    "notes": "Active recovery with mobility.",
+    "tags": [
+      "release-angle",
+      "run-up"
+    ],
+    "athlete": "athlete-001",
+    "team": "demo-team-bravo",
+    "athlete_hash": "39b6ae9d0635"
+  },
+  {
+    "date": "2025-11-07",
+    "best": 56.8,
+    "throws": [
+      56.9,
+      56.5,
+      56.7,
+      57.4,
+      56.8
+    ],
+    "rpe": 6,
+    "duration_minutes": 37.0,
+    "notes": "Focus on rhythm through the runway.",
+    "tags": [
+      "release-angle"
+    ],
+    "athlete": "athlete-002",
+    "team": "demo-team-bravo",
+    "athlete_hash": "6593ddc33d92"
+  }
+]

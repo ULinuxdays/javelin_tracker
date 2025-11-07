@@ -1,0 +1,2 @@
+[console_scripts]
+javelin = javelin_tracker.cli:app

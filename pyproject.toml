@@ -11,16 +11,39 @@ requires-python = ">=3.9"
 authors = [
   { name = "Uday", email = "uday@example.com" }
 ]
+license = { file = "LICENSE" }
+keywords = ["sports-analytics", "athlete-monitoring", "cli", "training-load"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Utilities",
+]
 dependencies = [
   "typer>=0.9",
   "pandas>=2.0",
   "matplotlib>=3.8",
+  "numpy>=1.23",
+  "reportlab>=4.0",
+  "pyarrow>=10.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/uday/Javelin"
+Documentation = "https://github.com/uday/Javelin/tree/main/docs"
+Repository = "https://github.com/uday/Javelin.git"
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
-  "ruff>=0.6"
+  "ruff>=0.6",
+  "build>=1.2",
+  "twine>=5.1",
 ]
 
 [project.scripts]

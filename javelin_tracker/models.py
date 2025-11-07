@@ -11,6 +11,7 @@ __all__ = [
     "validate_distance",
     "parse_throws",
     "parse_tags",
+    "validate_duration",
     "Session",
     "ValidationError",
 ]
@@ -161,14 +162,22 @@ def parse_tags(payload: Any, *, field: str = "tags") -> list[str]:
     return [token for token in tokens if token]
 
 
+def validate_duration(value: Any, *, field: str = "duration_minutes") -> float:
+    """Ensure duration is a non-negative floating-point number."""
+    return coerce_number(value, field=field, minimum=0.0)
+
+
 @dataclass(slots=True)
 class Session:
     """Lightweight record capturing a single training session."""
 
     date: date
     best: float
+    athlete: str
+    team: Optional[str] = None
     throws: List[float] = field(default_factory=list)
     rpe: Optional[int] = None
+    duration_minutes: float = 0.0
     notes: Optional[str] = None
     tags: List[str] = field(default_factory=list)
 
@@ -177,10 +186,14 @@ class Session:
         payload: Dict[str, Any] = {
             "date": self.date.isoformat(),
             "best": self.best,
+            "athlete": self.athlete,
             "throws": self.throws,
         }
+        if self.team:
+            payload["team"] = self.team
         if self.rpe is not None:
             payload["rpe"] = self.rpe
+        payload["duration_minutes"] = self.duration_minutes
         if self.notes:
             payload["notes"] = self.notes
         if self.tags:
