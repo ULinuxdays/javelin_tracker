@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented here. The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); dates use ISO 8601.
 
+## [Unreleased]
+
+### Changed
+- Rebranded the application as **Throws Tracker** (CLI/package/docs) while retaining backward compatibility with the former Javelin Tracker name.
+- Added new `THROWS_TRACKER_*` environment variables (data dir, sessions file, role, env, config, bootstrap demo) with automatic fallbacks to the historical `JAVELIN_TRACKER_*` names.
+- Updated export metadata, citations, and documentation to reference the throws-tracker PyPI/Docker artefacts.
+
 ## [0.1.0] - 2025-02-14
 
 ### Added

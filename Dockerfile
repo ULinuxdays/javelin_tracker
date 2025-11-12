@@ -4,6 +4,7 @@ FROM python:3.12-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    THROWS_TRACKER_DATA_DIR=/data \
     JAVELIN_TRACKER_DATA_DIR=/data
 
 WORKDIR /app
@@ -25,10 +26,10 @@ COPY scripts ./scripts
 RUN python -m pip install --upgrade pip \
     && pip install .
 
-RUN groupadd --system javelin && useradd --system --gid javelin --home /app javelin
-RUN mkdir -p /data && chown -R javelin:javelin /data /app
+RUN groupadd --system throws && useradd --system --gid throws --home /app throws
+RUN mkdir -p /data && chown -R throws:throws /data /app
 
-USER javelin
+USER throws
 
 VOLUME ["/data"]
 

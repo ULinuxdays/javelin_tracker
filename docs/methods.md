@@ -1,20 +1,21 @@
-## Javelin Tracker Methods Note (v0.1.0)
+## Throws Tracker Methods Note (v0.1.0)
 
 _Last updated: 2025-02-14. Cite this document with the main software citation in `CITATION.cff`._
 
 ### 1. Overview
 
-Javelin Tracker is a reproducible command-line pipeline for capturing throwing sessions, computing workload metrics, and generating decision-support reports for coaches and researchers. This note enumerates the core algorithms, data transformations, and reference literature so the software can be cited as a transparent “methods paper” alongside traditional publications.
+Throws Tracker is a reproducible command-line pipeline for capturing throwing sessions, computing workload metrics, and generating decision-support reports for coaches and researchers. This note enumerates the core algorithms, data transformations, and reference literature so the software can be cited as a transparent “methods paper” alongside traditional publications.
 
 ### 2. Data ingestion & schema
 
-- **Capture** – The CLI `log` command accepts ISO&nbsp;8601 dates, best throw distance, per-throw series, RPE (1–10), duration (minutes), notes, tags, `athlete`, and optional `team`. Inputs are validated via the `Session` dataclass: distances must be positive floats, RPE values are clamped to `[1, 10]`, and durations must be non-negative real numbers.
-- **Storage** – Sessions persist in JSON (`data/sessions.json` by default). Each record stores the multi-athlete fields plus free-text notes; exports append hashed identifiers for anonymised sharing. Environment variables `JAVELIN_TRACKER_DATA_DIR` or `JAVELIN_TRACKER_SESSIONS_FILE` redirect storage for secure deployments.
-- **Normalization** – `sessions_to_dataframe` converts the JSON list into a pandas `DataFrame`, ensuring `date` is timezone-naïve UTC, calculating `throws_count`, attaching `athlete`/`team`, and dropping malformed entries. This is the canonical in-memory representation for all downstream routines.
+- **Capture** – The CLI `log` command accepts ISO&nbsp;8601 dates, best throw distance, per-throw series, RPE (1–10), duration (minutes), notes, tags, `athlete`, optional `team`, and a required `event` string (`javelin`, `discus`, `shot`, `hammer`, or a custom label defined in config). Optional per-event fields (`implement_weight_kg`, `technique`, `fouls`) are normalised when supplied. Inputs are validated via the `Session` dataclass: distances must be positive floats, RPE values are clamped to `[1, 10]`, and durations must be non-negative real numbers.
+- **Storage** – Sessions persist in JSON (`data/sessions.json` by default). Each record stores the multi-athlete fields, `event`, event-specific optionals, and free-text notes; exports append hashed identifiers for anonymised sharing. Environment variables `THROWS_TRACKER_DATA_DIR` or `THROWS_TRACKER_SESSIONS_FILE` (legacy `JAVELIN_…` prefixes remain supported) redirect storage for secure deployments.
+- **Schema versioning** – Every record includes `schema_version`. The current release writes `schema_version=2`; a built-in migration routine backfills missing events as `javelin`, recomputes `load`, and sets the new version so old data remain readable in-place. See `docs/schema.md` for the canonical field list.
+- **Normalization** – `sessions_to_dataframe` converts the JSON list into a pandas `DataFrame`, ensuring `date` is timezone-naïve UTC, calculating `throws_count`, attaching `athlete`/`team`/`event`, and dropping malformed entries. This is the canonical in-memory representation for all downstream routines. Allowed events and ACWR thresholds default to `config/throws_tracker.toml` (or the `THROWS_TRACKER_CONFIG` override, with legacy env names still honoured); run `javelin config` to inspect the effective values.
 
 ### 3. Session workload (session-RPE)
 
-We implement the session-RPE method (Foster et&nbsp;al., 2001):
+We implement the event-agnostic session-RPE method (Foster et&nbsp;al., 2001):
 
 \[
 \text{session load}_i = \text{RPE}_i \times \text{duration}_i \text{ (minutes)}

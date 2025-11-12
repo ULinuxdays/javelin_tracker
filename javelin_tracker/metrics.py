@@ -5,8 +5,14 @@ from typing import Iterable, Mapping, Sequence
 import pandas as pd
 
 from .constants import DEFAULT_ATHLETE_PLACEHOLDER
+from .config import get_config
 from .models import (
+    CURRENT_SCHEMA_VERSION,
+    DEFAULT_EVENT,
     Session,
+    ValidationError,
+    calculate_session_load,
+    coerce_number,
     parse_iso_date,
     parse_tags,
     parse_throws,
@@ -14,9 +20,10 @@ from .models import (
     validate_duration,
 )
 
-SAFE_ACWR_LOWER = 0.8
-SAFE_ACWR_UPPER = 1.3
-RISK_THRESHOLD_HIGH = 1.5
+
+def _thresholds() -> tuple[float, float, float]:
+    cfg = get_config().acwr_thresholds
+    return cfg.sweet_min, cfg.sweet_max, cfg.high
 
 
 def sessions_to_dataframe(sessions: Sequence[Mapping[str, object] | Session]) -> pd.DataFrame:
@@ -32,6 +39,7 @@ def sessions_to_dataframe(sessions: Sequence[Mapping[str, object] | Session]) ->
             raise TypeError(f"Unsupported session type: {type(item)!r}")
 
         session_date = parse_iso_date(payload.get("date"), field="date")
+        event = _normalise_event(payload.get("event"))
         throws = _normalise_throws(payload.get("throws", []))
         best = validate_distance(payload.get("best"), field="best")
         rpe = payload.get("rpe")
@@ -41,6 +49,14 @@ def sessions_to_dataframe(sessions: Sequence[Mapping[str, object] | Session]) ->
         team_raw = payload.get("team")
         team = str(team_raw).strip() if isinstance(team_raw, str) else team_raw
         team_value = team if team else None
+        implement_weight = _optional_float(payload.get("implement_weight_kg"))
+        technique = _optional_str(payload.get("technique"))
+        fouls = _optional_int(payload.get("fouls"))
+        schema_raw = payload.get("schema_version")
+        try:
+            schema_version = int(schema_raw)
+        except (TypeError, ValueError):
+            schema_version = CURRENT_SCHEMA_VERSION
 
         records.append(
             {
@@ -55,11 +71,16 @@ def sessions_to_dataframe(sessions: Sequence[Mapping[str, object] | Session]) ->
                 "tags": parse_tags(payload.get("tags", []), field="tags"),
                 "athlete": athlete,
                 "team": team_value,
+                "event": event,
+                "implement_weight_kg": implement_weight,
+                "technique": technique,
+                "fouls": fouls,
+                "schema_version": schema_version,
             }
         )
 
     df = pd.DataFrame(records)
-    sort_keys = ["athlete", "date"] if "athlete" in df.columns else ["date"]
+    sort_keys = [key for key in ("athlete", "event", "date") if key in df.columns]
     df.sort_values(sort_keys, inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
@@ -89,16 +110,19 @@ def compute_daily_metrics(
     if not group_keys:
         return _compute_daily_metrics_single(df_sessions)
 
-    frames: list[pd.DataFrame] = []
+    rows: list[dict[str, object]] = []
     grouped = df_sessions.groupby(group_keys, dropna=False)
     for key, group in grouped:
         daily = _compute_daily_metrics_single(group)
         key_tuple = _ensure_tuple(key)
         for idx, column in enumerate(group_keys):
             daily[column] = key_tuple[idx]
-        frames.append(daily)
+        rows.extend(daily.to_dict("records"))
 
-    combined = pd.concat(frames, ignore_index=True)
+    if not rows:
+        return pd.DataFrame(columns=base_columns)
+
+    combined = pd.DataFrame(rows)
     ordered = group_keys + [col for col in combined.columns if col not in group_keys]
     return combined[ordered]
 
@@ -195,6 +219,9 @@ def compute_weekly_summary(
         weekly["acwr_ewma"] = pd.NA
         weekly["risk_flag"] = ""
 
+    for column in ("avg_rpe", "total_load", "acwr_rolling", "acwr_ewma"):
+        if column in weekly.columns:
+            weekly[column] = pd.to_numeric(weekly[column], errors="coerce")
     weekly["avg_rpe"] = weekly["avg_rpe"].round(2)
     weekly["total_load"] = weekly["total_load"].round(1)
     weekly["acwr_rolling"] = weekly["acwr_rolling"].round(2)
@@ -211,6 +238,38 @@ def _normalise_throws(throws: Iterable[object]) -> list[float]:
     return [validate_distance(value, field="throw") for value in values]
 
 
+def _normalise_event(value: object | None) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower()
+    return DEFAULT_EVENT
+
+
+def _optional_float(value: object | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(coerce_number(value, field="value", allow_empty=True))
+    except ValidationError:
+        return None
+
+
+def _optional_int(value: object | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        coerced = coerce_number(value, field="value", allow_float=False)
+    except ValidationError:
+        return None
+    return int(coerced)
+
+
+def _optional_str(value: object | None) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    return None
+
+
 def _ensure_tuple(key: object) -> tuple:
     if isinstance(key, tuple):
         return key
@@ -218,9 +277,9 @@ def _ensure_tuple(key: object) -> tuple:
 
 
 def _calculate_load(rpe: object | None, duration: float) -> float:
-    if rpe is None or pd.isna(rpe) or duration <= 0:
+    if rpe is None or pd.isna(rpe):
         return 0.0
-    return float(rpe) * duration
+    return calculate_session_load(rpe, float(duration))
 
 
 def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
@@ -229,12 +288,13 @@ def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
 
 
 def _risk_category(acwr_roll: float, acwr_ewma: float) -> str:
+    lower, sweet_max, high = _thresholds()
     values = [value for value in (acwr_roll, acwr_ewma) if pd.notna(value)]
     if not values:
         return ""
-    if any(value > RISK_THRESHOLD_HIGH or value < SAFE_ACWR_LOWER for value in values):
+    if any(value > high or value < lower for value in values):
         return "HIGH"
-    if any(value > SAFE_ACWR_UPPER for value in values):
+    if any(value > sweet_max for value in values):
         return "MODERATE"
     return "LOW"
 

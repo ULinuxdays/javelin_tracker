@@ -3,9 +3,9 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "javelin-tracker"
+name = "throws-tracker"
 version = "0.1.0"
-description = "CLI utilities for tracking javelin training sessions."
+description = "CLI utilities for tracking multi-event throwing sessions."
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [
@@ -48,6 +48,7 @@ dev = [
 
 [project.scripts]
 javelin = "javelin_tracker.cli:app"
+throws = "javelin_tracker.cli:app"
 
 [tool.setuptools]
 packages = ["javelin_tracker"]

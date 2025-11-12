@@ -1,7 +1,7 @@
 Metadata-Version: 2.4
-Name: javelin-tracker
+Name: throws-tracker
 Version: 0.1.0
-Summary: CLI utilities for tracking javelin training sessions.
+Summary: CLI utilities for tracking multi-event throwing sessions.
 Author-email: Uday <uday@example.com>
 License: MIT License
         
@@ -54,9 +54,9 @@ Requires-Dist: build>=1.2; extra == "dev"
 Requires-Dist: twine>=5.1; extra == "dev"
 Dynamic: license-file
 
-# Javelin Tracker
+# Throws Tracker
 
-Command-line utilities for logging sessions, analysing workloads, and generating reports for javelin throwers and coaches.
+Command-line utilities for logging sessions, analysing workloads, and generating reports for throwing events (javelin, discus, shot, hammer, or custom).
 
 ## Installation
 
@@ -65,9 +65,9 @@ Choose the workflow that matches your environment. See `docs/INSTALL.md` for pla
 ### PyPI / pipx
 
 ```bash
-pip install javelin-tracker
+pip install throws-tracker   # formerly published as javelin-tracker
 # or
-pipx install javelin-tracker
+pipx install throws-tracker
 ```
 
 ### From source (developer setup)
@@ -80,17 +80,20 @@ pip install -r requirements.txt
 pip install -e ".[dev]"
 ```
 
-Set `JAVELIN_TRACKER_DATA_DIR` if you want the CLI to store sessions outside the default `data/` directory (e.g. `export JAVELIN_TRACKER_DATA_DIR=~/.local/share/javelin`).
+Set `THROWS_TRACKER_DATA_DIR` (legacy `JAVELIN_TRACKER_DATA_DIR`) if you want the CLI to store sessions outside the default `data/` directory (e.g. `export THROWS_TRACKER_DATA_DIR=~/.local/share/throws`).
 
 ## Quick Start
 
 ```bash
-javelin log --throws "61.4, 60.8, 62.1" --rpe 6 --duration-minutes 55
-javelin summary --by week
-javelin plot
-javelin export --to export/sessions
-javelin weekly-report --week-ending 2024-06-09
+javelin log --event javelin --throws "61.4, 60.8, 62.1" --rpe 6 --duration-minutes 55
+javelin log --event discus --best 55.3 --fouls 1
+javelin summary --event shot --by week
+javelin plot --event javelin --event discus
+javelin export --event javelin --to export/sessions
+javelin weekly-report --athlete esha --event discus --week-ending 2024-06-09
 ```
+
+Show the active config (allowed events, ACWR thresholds) any time with `javelin config`.
 
 Use `python -m javelin_tracker seed --source demo/demo_sessions.json --force` to bootstrap a dataset for experimentation.
 
@@ -98,7 +101,7 @@ Use `python -m javelin_tracker seed --source demo/demo_sessions.json --force` to
 
 - `scripts/generate_demo_data.py` creates deterministic demo logs (`demo/demo_sessions.{json,csv}`).
 - `javelin seed --source demo/demo_sessions.json --force` copies the synthetic data into `data/sessions.json`.
-- The Docker entrypoint accepts `JAVELIN_TRACKER_BOOTSTRAP_DEMO=1` to seed the container automatically (see below).
+- The Docker entrypoint accepts `THROWS_TRACKER_BOOTSTRAP_DEMO=1` (or the legacy `JAVELIN_TRACKER_BOOTSTRAP_DEMO=1`) to seed the container automatically (see below).
 
 More detailed instructions live in `docs/demo-sandbox.md`.
 
@@ -107,14 +110,14 @@ More detailed instructions live in `docs/demo-sandbox.md`.
 Build and run the ready-to-use image:
 
 ```bash
-docker build -t javelin-tracker .
+docker build -t throws-tracker .
 docker run --rm -it \
-  -e JAVELIN_TRACKER_BOOTSTRAP_DEMO=1 \
+  -e THROWS_TRACKER_BOOTSTRAP_DEMO=1 \
   -v "$(pwd)/data:/data" \
-  javelin-tracker summary
+  throws-tracker summary
 ```
 
-The container runs as a non-root `javelin` user and writes sessions to `/data` (mounted as a volume by default).
+The container runs as a non-root `throws` user and writes sessions to `/data` (mounted as a volume by default).
 
 ## Testing, linting & CI
 
@@ -124,7 +127,7 @@ The container runs as a non-root `javelin` user and writes sessions to `/data` (
 
 ## Packaging & releases
 
-The project ships as a standard PEP 621 package (`pyproject.toml`) with console entry point `javelin`. Use the following to produce an sdist/wheel and publish:
+The project ships as a standard PEP 621 package (`pyproject.toml`) with console entry points `javelin` and `throws`. Use the following to produce an sdist/wheel and publish:
 
 ```bash
 rm -rf dist
@@ -132,7 +135,7 @@ python -m build
 twine upload dist/*
 ```
 
-Detailed release, container, and compliance notes are documented in `docs/RELEASING.md`.
+Detailed release, container, compliance, and Zenodo DOI notes live in `docs/RELEASING.md`.
 
 ## Directory layout
 

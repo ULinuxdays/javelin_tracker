@@ -13,9 +13,11 @@ import pandas as pd
 from .constants import DEFAULT_ATHLETE_PLACEHOLDER
 from .metrics import compute_daily_metrics, compute_weekly_summary, sessions_to_dataframe
 from .models import (
+    DEFAULT_EVENT,
     Session,
     ValidationError,
     clamp_rpe,
+    coerce_number,
     parse_iso_date,
     parse_tags,
     parse_throws,
@@ -32,6 +34,18 @@ def _normalise_identity(value: str | None, *, field: str, default: str | None = 
     raise ValidationError(f"{field} is required.")
 
 
+def _normalise_event_name(value: str | None) -> str:
+    text = (value or "").strip()
+    if not text:
+        raise ValidationError("event is required.")
+    return text.lower()
+
+
+def _format_event_label(value: str | None) -> str:
+    text = (value or DEFAULT_EVENT).replace("_", " ").strip() or DEFAULT_EVENT
+    return text.title()
+
+
 @dataclass(frozen=True)
 class LogResult:
     """Structured outcome of parsing log arguments."""
@@ -41,8 +55,9 @@ class LogResult:
 
     @property
     def confirmation(self) -> str:
+        event_label = _format_event_label(self.session.event)
         return (
-            f"[{self.session.athlete}] "
+            f"[{self.session.athlete} | {event_label}] "
             f"Logged {self.session.date.isoformat()} best {self.session.best:.1f} m."
         )
 
@@ -50,6 +65,7 @@ class LogResult:
     def verbose_tokens(self) -> list[str]:
         tokens: list[str] = []
         tokens.append(f"athlete={self.session.athlete}")
+        tokens.append(f"event={self.session.event}")
         if self.session.team:
             tokens.append(f"team={self.session.team}")
         if self.throws:
@@ -63,6 +79,12 @@ class LogResult:
             tokens.append(f"duration={self.session.duration_minutes:.1f} min")
             if load is not None:
                 tokens.append(f"load={load:.1f} AU")
+        if self.session.implement_weight_kg is not None:
+            tokens.append(f"implement={self.session.implement_weight_kg:.2f} kg")
+        if self.session.technique:
+            tokens.append(f"technique={self.session.technique}")
+        if self.session.fouls is not None:
+            tokens.append(f"fouls={self.session.fouls}")
         if self.session.notes:
             tokens.append("notes recorded")
         return tokens
@@ -76,6 +98,8 @@ class LogResult:
 
 @dataclass(frozen=True)
 class SummaryRow:
+    scope: str  # "event" or "all"
+    event: str
     marker: str
     athlete: str
     team: str | None
@@ -93,15 +117,16 @@ class SummaryRow:
 @dataclass(frozen=True)
 class SummaryReport:
     rows: list[SummaryRow]
+    rollup_rows: list[SummaryRow]
     total_sessions: int
     total_throws: int
     total_load: float
     average_rpe: float | None
     date_range: tuple[date, date] | None
     personal_best: tuple[date, float] | None
-    personal_bests: dict[str, tuple[date, float]]
-    pb_groups: set[str]
-    high_risk_dates: dict[str, list[date]]
+    personal_bests: dict[tuple[str, str], tuple[date, float]]
+    pb_groups: set[tuple[str, str, str]]
+    high_risk_dates: dict[tuple[str, str], list[date]]
     filters: dict[str, Any]
 
 
@@ -116,6 +141,10 @@ def build_session_from_inputs(
     duration_minutes: float | None,
     athlete: str | None,
     team: str | None,
+    event: str | None,
+    implement_weight_kg: float | None = None,
+    technique: str | None = None,
+    fouls: int | None = None,
 ) -> LogResult:
     """Convert CLI inputs into a validated session payload."""
     session_date = parse_iso_date(date_text, field="date") if date_text else date.today()
@@ -138,17 +167,33 @@ def build_session_from_inputs(
     )
     athlete_name = _normalise_identity(athlete, field="athlete", default=DEFAULT_ATHLETE_PLACEHOLDER)
     team_name = team.strip() if team and team.strip() else None
+    event_name = _normalise_event_name(event)
+    implement_weight_value = (
+        float(coerce_number(implement_weight_kg, field="implement_weight_kg", minimum=0.0))
+        if implement_weight_kg is not None
+        else None
+    )
+    technique_value = technique.strip() if technique and technique.strip() else None
+    fouls_value = (
+        int(coerce_number(fouls, field="fouls", allow_float=False, minimum=0))
+        if fouls is not None
+        else None
+    )
 
     session = Session(
         date=session_date,
         best=best_distance,
         athlete=athlete_name,
+        event=event_name,
         team=team_name,
         throws=throws_distances,
         rpe=rpe_value,
         duration_minutes=duration_value,
         notes=note_value,
         tags=tag_list,
+        implement_weight_kg=implement_weight_value,
+        technique=technique_value,
+        fouls=fouls_value,
     )
     return LogResult(session=session, throws=throws_distances)
 
@@ -158,6 +203,11 @@ def build_summary_report(
     *,
     group: str,
     filters: dict[str, Any] | None = None,
+    athlete: str | None = None,
+    team: str | None = None,
+    events: Sequence[str] | None = None,
+    since: date | None = None,
+    until: date | None = None,
 ) -> SummaryReport:
     """Produce aggregated statistics for summary displays."""
     normalised_group = group.lower()
@@ -165,50 +215,85 @@ def build_summary_report(
         raise ValueError("Grouping must be 'week' or 'month'.")
 
     df_sessions = sessions_to_dataframe(sessions)
-    group_keys = ["athlete"]
+    df_sessions = _filter_dataframe(
+        df_sessions,
+        athlete=athlete,
+        team=team,
+        events=events,
+        since=since,
+        until=until,
+    )
+    if df_sessions.empty:
+        return SummaryReport(
+            rows=[],
+            rollup_rows=[],
+            total_sessions=0,
+            total_throws=0,
+            total_load=0.0,
+            average_rpe=None,
+            date_range=None,
+            personal_best=None,
+            personal_bests={},
+            pb_groups=set(),
+            high_risk_dates={},
+            filters=filters or {},
+        )
+
+    event_filters = tuple(sorted({evt.strip().lower() for evt in (events or []) if evt}))
+    include_rollup = not event_filters
+
+    group_keys = ["athlete", "event"]
     daily = compute_daily_metrics(df_sessions, group_keys=group_keys)
     weekly = compute_weekly_summary(df_sessions, daily, group_keys=group_keys)
     summary_df = (
         weekly
         if normalised_group == "week"
-        else _convert_weekly_to_monthly(weekly, group_keys=["athlete", "team"])
+        else _convert_weekly_to_monthly(weekly, group_keys=["athlete", "event"])
     )
 
     personal_bests = _personal_best_from_df(df_sessions)
-    pb_groups = _pb_groups_from_summary(summary_df, personal_bests)
-    overall_pb = _overall_best_from_map(personal_bests)
-
+    pb_groups = _pb_groups_from_summary(summary_df, personal_bests, scope="event")
     rows = [
-        _summary_row_from_record(record, pb_groups) for record in summary_df.to_dict("records")
+        _summary_row_from_record(
+            record,
+            pb_groups,
+            scope="event",
+            event=str(record.get("event") or DEFAULT_EVENT),
+        )
+        for record in summary_df.to_dict("records")
     ]
 
+    rollup_rows: list[SummaryRow] = []
+    rollup_pb_groups: set[tuple[str, str, str]] = set()
+    if include_rollup:
+        daily_rollup = compute_daily_metrics(df_sessions, group_keys=["athlete"])
+        weekly_rollup = compute_weekly_summary(df_sessions, daily_rollup, group_keys=["athlete"])
+        rollup_df = (
+            weekly_rollup
+            if normalised_group == "week"
+            else _convert_weekly_to_monthly(weekly_rollup, group_keys=["athlete"])
+        )
+        pb_by_athlete = _personal_best_by_athlete(personal_bests)
+        rollup_pb_groups = _pb_groups_from_summary(rollup_df, pb_by_athlete, scope="all")
+        rollup_rows = [
+            _summary_row_from_record(record, rollup_pb_groups, scope="all", event="all")
+            for record in rollup_df.to_dict("records")
+        ]
+
     total_sessions = int(df_sessions.shape[0])
-    total_throws = int(df_sessions["throws_count"].sum()) if not df_sessions.empty else 0
-    total_load = float(df_sessions["load"].sum()) if not df_sessions.empty else 0.0
+    total_throws = int(df_sessions["throws_count"].sum())
+    total_load = float(df_sessions["load"].sum())
     avg_rpe = (
-        float(df_sessions["rpe"].dropna().mean())
-        if not df_sessions.empty and df_sessions["rpe"].dropna().size
-        else None
+        float(df_sessions["rpe"].dropna().mean()) if df_sessions["rpe"].dropna().size else None
     )
+    date_range = (df_sessions["date"].min().date(), df_sessions["date"].max().date())
 
-    date_range: tuple[date, date] | None = None
-    if not df_sessions.empty:
-        start = df_sessions["date"].min().date()
-        end = df_sessions["date"].max().date()
-        date_range = (start, end)
-
-    high_risk_dates: dict[str, list[date]] = defaultdict(list)
-    if not daily.empty and "risk_flag" in daily:
-        for _, record in daily.iterrows():
-            if record.get("risk_flag") == "HIGH":
-                athlete = str(record.get("athlete") or DEFAULT_ATHLETE_PLACEHOLDER)
-                high_risk_dates[athlete].append(pd.Timestamp(record["date"]).date())
-        for athlete in list(high_risk_dates.keys()):
-            unique_dates = sorted(set(high_risk_dates[athlete]))
-            high_risk_dates[athlete] = unique_dates
+    high_risk_dates = _map_high_risk_dates(daily)
+    overall_pb = _overall_best_from_map(personal_bests)
 
     return SummaryReport(
         rows=rows,
+        rollup_rows=rollup_rows,
         total_sessions=total_sessions,
         total_throws=total_throws,
         total_load=total_load,
@@ -216,7 +301,7 @@ def build_summary_report(
         date_range=date_range,
         personal_best=overall_pb,
         personal_bests=personal_bests,
-        pb_groups=pb_groups,
+        pb_groups=pb_groups | rollup_pb_groups,
         high_risk_dates=high_risk_dates,
         filters=filters or {},
     )
@@ -224,56 +309,108 @@ def build_summary_report(
 
 def render_summary_table(report: SummaryReport) -> str:
     """Render a fixed-width table for summary rows."""
-    headers = (
-        "marker",
-        "athlete",
-        "team",
-        "group",
-        "sessions",
-        "best",
-        "avg_rpe",
-        "load",
-        "throws",
-        "acwr_roll",
-        "acwr_ewma",
-        "risk",
-    )
-    rows = [
-        {
-            "marker": row.marker,
-            "athlete": row.athlete,
-            "team": row.team or "",
-            "group": row.label,
-            "sessions": str(row.sessions),
-            "best": f"{row.best_throw:.1f}" if row.best_throw is not None else "n/a",
-            "avg_rpe": f"{row.avg_rpe:.1f}" if row.avg_rpe is not None else "n/a",
-            "load": f"{row.total_load:.1f}",
-            "throws": str(row.throw_volume),
-            "acwr_roll": f"{row.acwr_rolling:.2f}" if row.acwr_rolling is not None else "n/a",
-            "acwr_ewma": f"{row.acwr_ewma:.2f}" if row.acwr_ewma is not None else "n/a",
-            "risk": row.risk_flag or "",
-        }
-        for row in report.rows
-    ]
-    widths = {key: len(key) for key in headers}
-    for row in rows:
-        for key in headers:
-            widths[key] = max(widths[key], len(row[key]))
 
-    def _format_line(values: Mapping[str, str]) -> str:
-        return "  ".join(values[key].rjust(widths[key]) for key in headers)
+    def _render_section(rows: list[SummaryRow], title: str) -> str:
+        if not rows:
+            return ""
+        headers = (
+            "marker",
+            "scope",
+            "event",
+            "athlete",
+            "team",
+            "group",
+            "sessions",
+            "best",
+            "avg_rpe",
+            "load",
+            "throws",
+            "acwr_roll",
+            "acwr_ewma",
+            "risk",
+        )
+        table_rows = [
+            {
+                "marker": row.marker,
+                "scope": row.scope.upper(),
+                "event": "All" if row.scope == "all" else _format_event_label(row.event),
+                "athlete": row.athlete,
+                "team": row.team or "",
+                "group": row.label,
+                "sessions": str(row.sessions),
+                "best": f"{row.best_throw:.1f}" if row.best_throw is not None else "n/a",
+                "avg_rpe": f"{row.avg_rpe:.1f}" if row.avg_rpe is not None else "n/a",
+                "load": f"{row.total_load:.1f}",
+                "throws": str(row.throw_volume),
+                "acwr_roll": f"{row.acwr_rolling:.2f}" if row.acwr_rolling is not None else "n/a",
+                "acwr_ewma": f"{row.acwr_ewma:.2f}" if row.acwr_ewma is not None else "n/a",
+                "risk": row.risk_flag or "",
+            }
+            for row in rows
+        ]
+        widths = {key: len(key) for key in headers}
+        for row in table_rows:
+            for key in headers:
+                widths[key] = max(widths[key], len(row[key]))
 
-    header_line = "  ".join(key.upper().rjust(widths[key]) for key in headers)
-    body = "\n".join(_format_line(row) for row in rows)
-    return "\n".join(filter(None, [header_line, body]))
+        def _format_line(values: Mapping[str, str]) -> str:
+            return "  ".join(values[key].rjust(widths[key]) for key in headers)
+
+        header_line = "  ".join(key.upper().rjust(widths[key]) for key in headers)
+        body = "\n".join(_format_line(row) for row in table_rows)
+        section_title = f"{title}\n" if title else ""
+        return "\n".join(filter(None, [section_title + header_line, body]))
+
+    sections = []
+    sections.append(_render_section(report.rollup_rows, "ALL EVENTS"))
+    sections.append(_render_section(report.rows, "PER-EVENT"))
+    return "\n\n".join(section for section in sections if section).strip()
+
+
+def _filter_dataframe(
+    df_sessions: pd.DataFrame,
+    *,
+    athlete: str | None,
+    team: str | None,
+    events: Sequence[str] | None,
+    since: date | None,
+    until: date | None,
+) -> pd.DataFrame:
+    if df_sessions.empty:
+        return df_sessions
+    mask = pd.Series(True, index=df_sessions.index)
+    if athlete:
+        athlete_lower = athlete.lower()
+        mask &= df_sessions["athlete"].str.lower() == athlete_lower
+    if team:
+        team_lower = team.lower()
+        mask &= df_sessions["team"].fillna("").str.lower() == team_lower
+    if events:
+        event_set = {event.strip().lower() for event in events if event}
+        if event_set:
+            mask &= df_sessions["event"].isin(event_set)
+    if since:
+        mask &= df_sessions["date"] >= pd.Timestamp(since)
+    if until:
+        mask &= df_sessions["date"] <= pd.Timestamp(until)
+    filtered = df_sessions.loc[mask].copy()
+    filtered.reset_index(drop=True, inplace=True)
+    return filtered
 
 
 def generate_plots(
     sessions: Sequence[Mapping[str, Any]],
     *,
     output_dir: Path,
+    athlete: str | None = None,
+    team: str | None = None,
+    events: Sequence[str] | None = None,
+    since: date | None = None,
+    until: date | None = None,
+    forecast: list[tuple[str, float]] | None = None,
+    forecast_title: str | None = None,
 ) -> list[Path]:
-    """Create distance line plot and weekly volume bar chart."""
+    """Create multi-event distance and weekly volume plots."""
 
     try:
         import matplotlib.pyplot as plt  # type: ignore
@@ -281,18 +418,30 @@ def generate_plots(
         raise RuntimeError("matplotlib is required to generate plots.") from exc
 
     df_sessions = sessions_to_dataframe(sessions)
+    df_sessions = _filter_dataframe(
+        df_sessions,
+        athlete=athlete,
+        team=team,
+        events=events,
+        since=since,
+        until=until,
+    )
     if df_sessions.empty:
         raise ValueError("No sessions available to plot.")
 
-    daily = compute_daily_metrics(df_sessions)
-    weekly = compute_weekly_summary(df_sessions, daily)
+    daily = compute_daily_metrics(df_sessions, group_keys=["event"])
+    weekly = compute_weekly_summary(df_sessions, daily, group_keys=["event"])
 
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     distance_path = _create_distance_plot(df_sessions, output_dir, timestamp, plt)
     volume_path = _create_volume_plot(weekly, output_dir, timestamp, plt)
-    return [distance_path, volume_path]
+    paths = [distance_path, volume_path]
+    if forecast:
+        forecast_path = _create_forecast_plot(forecast, output_dir, timestamp, plt, title=forecast_title)
+        paths.append(forecast_path)
+    return paths
 
 
 def build_export_dataframe(
@@ -317,22 +466,27 @@ def build_export_dataframe(
         },
         inplace=True,
     )
-    return export_df[
-        [
-            "athlete",
-            "team",
-            "date",
-            "best_throw",
-            "throws",
-            "throws_count",
-            "rpe",
-            "duration_minutes",
-            "load",
-            "avg_throw",
-            "tags",
-            "notes",
-        ]
+    columns = [
+        "athlete",
+        "team",
+        "event",
+        "date",
+        "best_throw",
+        "throws",
+        "throws_count",
+        "rpe",
+        "duration_minutes",
+        "load",
+        "avg_throw",
+        "implement_weight_kg",
+        "technique",
+        "fouls",
+        "tags",
+        "notes",
+        "schema_version",
     ]
+    available = [column for column in columns if column in export_df.columns]
+    return export_df[available]
 
 
 def load_seed_payload(source: Path) -> list[dict[str, Any]]:
@@ -357,16 +511,34 @@ def _create_distance_plot(
     timestamp: str,
     plt: Any,
 ) -> Path:
-    ordered = df_sessions.sort_values("date")
-    dates = ordered["date"].dt.date
-    bests = ordered["best"]
-
     line_path = output_dir / f"best_distance_{timestamp}.png"
     fig, ax = plt.subplots()
-    ax.plot(dates, bests, marker="o", linewidth=2)
-    ax.set_title("Best Distance Over Time")
+    markers = ["o", "s", "^", "D", "P", "X", "*", "v"]
+
+    grouped = df_sessions.groupby("event")
+    plotted = False
+    for idx, (event, group) in enumerate(grouped):
+        ordered = group.sort_values("date")
+        if ordered.empty:
+            continue
+        marker = markers[idx % len(markers)]
+        ax.plot(
+            ordered["date"].dt.date,
+            ordered["best"],
+            marker=marker,
+            linewidth=2,
+            label=_format_event_label(event),
+        )
+        plotted = True
+
+    if not plotted:
+        ax.plot([], [])
+
+    ax.set_title("Best Distance Over Time (per event)")
     ax.set_xlabel("Date")
     ax.set_ylabel("Best Distance (m)")
+    if grouped.ngroups > 1:
+        ax.legend()
     fig.autofmt_xdate()
     fig.tight_layout()
     fig.savefig(line_path, dpi=150)
@@ -380,25 +552,75 @@ def _create_volume_plot(
     timestamp: str,
     plt: Any,
 ) -> Path:
-    if weekly.empty:
-        labels: list[str] = []
-        volumes: list[int] = []
-    else:
-        labels = weekly["label"].tolist()
-        volumes = weekly["throw_volume"].astype(int).tolist()
-
     bar_path = output_dir / f"weekly_volume_{timestamp}.png"
     fig, ax = plt.subplots()
-    ax.bar(labels, volumes, color="#4C72B0")
-    ax.set_title("Weekly Throw Volume")
+    if weekly.empty:
+        labels: list[str] = []
+        event_volume: dict[str, list[int]] = {}
+    else:
+        labels = list(dict.fromkeys(weekly["label"].tolist()))
+        events = sorted({str(event) for event in weekly["event"].fillna("unknown")})
+        event_volume = {event: [0 for _ in labels] for event in events}
+        label_index = {label: idx for idx, label in enumerate(labels)}
+        for _, row in weekly.iterrows():
+            event = str(row.get("event") or "unknown")
+            label = row.get("label")
+            if label not in label_index:
+                continue
+            idx = label_index[label]
+            event_volume[event][idx] += int(row.get("throw_volume") or 0)
+
+    bottom = [0 for _ in labels]
+    for event, volumes in event_volume.items():
+        ax.bar(
+            labels,
+            volumes,
+            bottom=bottom,
+            label=_format_event_label(event),
+        )
+        bottom = [b + v for b, v in zip(bottom, volumes)]
+
+    ax.set_title("Weekly Throw Volume by Event")
     ax.set_xlabel("Week")
     ax.set_ylabel("Throws Recorded")
     if labels:
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+    if event_volume:
+        ax.legend()
     fig.tight_layout()
     fig.savefig(bar_path, dpi=150)
     plt.close(fig)
     return bar_path
+
+
+def _create_forecast_plot(
+    forecast: list[tuple[str, float]],
+    output_dir: Path,
+    timestamp: str,
+    plt: Any,
+    *,
+    title: str | None = None,
+) -> Path:
+    path = output_dir / f"forecast_{timestamp}.png"
+    if not forecast:
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, "No forecast available", ha="center", va="center")
+        ax.set_axis_off()
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        return path
+    dates = [pd.to_datetime(d).date() for d, _ in forecast]
+    values = [v for _, v in forecast]
+    fig, ax = plt.subplots()
+    ax.plot(dates, values, linestyle="--", color="#C92A2A", marker=".")
+    ax.set_title(title or "Forecast")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Predicted Value")
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
 
 
 def _normalise_throw_distances(tokens: Sequence[Any]) -> list[float]:
@@ -418,7 +640,13 @@ def _resolve_best_from_throws(throws: Sequence[float]) -> float:
     return max(throws)
 
 
-def _summary_row_from_record(record: Mapping[str, Any], pb_groups: set[str]) -> SummaryRow:
+def _summary_row_from_record(
+    record: Mapping[str, Any],
+    pb_groups: set[tuple[str, str, str]],
+    *,
+    scope: str,
+    event: str,
+) -> SummaryRow:
     label = _compose_label(record)
     primary_label = str(
         record.get("label") or record.get("week_label") or record.get("month_label") or label
@@ -434,14 +662,17 @@ def _summary_row_from_record(record: Mapping[str, Any], pb_groups: set[str]) -> 
     team = record.get("team") or None
 
     marker_parts: list[str] = []
-    pb_key = f"{athlete}|{primary_label}"
-    if pb_key in pb_groups or f"{athlete}|{label}" in pb_groups:
+    pb_key_primary = (athlete, event if scope == "event" else "all", primary_label)
+    pb_key_label = (athlete, event if scope == "event" else "all", label)
+    if pb_key_primary in pb_groups or pb_key_label in pb_groups:
         marker_parts.append("★ PB")
     if risk_flag == "HIGH":
         marker_parts.append("⚠ High Risk")
     marker = " ".join(marker_parts)
 
     return SummaryRow(
+        scope=scope,
+        event=event,
         marker=marker,
         athlete=athlete,
         team=team,
@@ -540,28 +771,49 @@ def _convert_weekly_to_monthly(weekly: pd.DataFrame, group_keys: Sequence[str]) 
     return pd.DataFrame(aggregated_rows)
 
 
-def _personal_best_from_df(df_sessions: pd.DataFrame) -> dict[str, tuple[date, float]]:
+def _personal_best_from_df(
+    df_sessions: pd.DataFrame,
+) -> dict[tuple[str, str], tuple[date, float]]:
     if df_sessions.empty or "athlete" not in df_sessions.columns:
         return {}
-    bests: dict[str, tuple[date, float]] = {}
-    for athlete, group in df_sessions.groupby("athlete"):
+    bests: dict[tuple[str, str], tuple[date, float]] = {}
+    group_cols = ["athlete", "event"] if "event" in df_sessions.columns else ["athlete"]
+    for group_key, group in df_sessions.groupby(group_cols):
+        if isinstance(group_key, tuple):
+            athlete, event = group_key
+        else:
+            athlete, event = group_key, "all"
         idx = group["best"].idxmax()
         if pd.isna(idx):
             continue
         row = group.loc[idx]
-        bests[str(athlete)] = (row["date"].date(), float(row["best"]))
+        bests[(str(athlete), str(event))] = (row["date"].date(), float(row["best"]))
     return bests
+
+
+def _personal_best_by_athlete(
+    pb_map: dict[tuple[str, str], tuple[date, float]],
+) -> dict[tuple[str, str], tuple[date, float]]:
+    collapsed: dict[tuple[str, str], tuple[date, float]] = {}
+    for (athlete, _event), (pb_date, pb_value) in pb_map.items():
+        key = (athlete, "all")
+        current = collapsed.get(key)
+        if current is None or pb_value > current[1]:
+            collapsed[key] = (pb_date, pb_value)
+    return collapsed
 
 
 def _pb_groups_from_summary(
     summary_df: pd.DataFrame,
-    pb_map: dict[str, tuple[date, float]],
-) -> set[str]:
-    labels: set[str] = set()
+    pb_map: dict[tuple[str, str], tuple[date, float]],
+    *,
+    scope: str,
+) -> set[tuple[str, str, str]]:
+    labels: set[tuple[str, str, str]] = set()
     if summary_df.empty or not pb_map:
         return labels
 
-    for athlete, (pb_date, _) in pb_map.items():
+    for (athlete, pb_event), (pb_date, _) in pb_map.items():
         for _, record in summary_df.iterrows():
             start = (
                 pd.to_datetime(record.get("start_date")).date()
@@ -575,9 +827,25 @@ def _pb_groups_from_summary(
             )
             if start and end and start <= pb_date <= end:
                 label = record.get("label") or record.get("week_label") or record.get("month_label")
-                labels.add(f"{athlete}|{label}")
+                record_event = str(record.get("event") or "all")
+                key_event = record_event if scope == "event" else "all"
+                if scope == "event" and record_event != pb_event:
+                    continue
+                labels.add((athlete, key_event, str(label)))
                 break
     return labels
+
+
+def _map_high_risk_dates(daily: pd.DataFrame) -> dict[tuple[str, str], list[date]]:
+    if daily.empty or "risk_flag" not in daily.columns:
+        return {}
+    high_risk: dict[tuple[str, str], set[date]] = defaultdict(set)
+    for _, record in daily.iterrows():
+        if record.get("risk_flag") == "HIGH":
+            athlete = str(record.get("athlete") or DEFAULT_ATHLETE_PLACEHOLDER)
+            event = str(record.get("event") or DEFAULT_EVENT)
+            high_risk[(athlete, event)].add(pd.Timestamp(record["date"]).date())
+    return {key: sorted(values) for key, values in high_risk.items()}
 
 
 def _aggregate_risk(flags: list[Any]) -> str:
@@ -591,8 +859,10 @@ def _aggregate_risk(flags: list[Any]) -> str:
     return "LOW"
 
 
-def _overall_best_from_map(pb_map: dict[str, tuple[date, float]]) -> tuple[date, float] | None:
+def _overall_best_from_map(
+    pb_map: dict[tuple[str, str], tuple[date, float]],
+) -> tuple[date, float] | None:
     if not pb_map:
         return None
-    athlete, (pb_date, pb_value) = max(pb_map.items(), key=lambda item: item[1][1])
+    _, (pb_date, pb_value) = max(pb_map.items(), key=lambda item: item[1][1])
     return (pb_date, pb_value)

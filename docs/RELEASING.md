@@ -34,18 +34,18 @@ The command produces both `wheel` and `sdist` artifacts under `dist/`.
 python -m twine upload dist/*
 ```
 
-Use `--repository testpypi` for staging uploads. Confirm installation with `pip install --index-url ... javelin-tracker`.
+Use `--repository testpypi` for staging uploads. Confirm installation with `pip install --index-url ... throws-tracker` (legacy package name `javelin-tracker` is retained on PyPI for backwards compatibility).
 
 ### 5. Docker image
 
 ```bash
-docker build -t ghcr.io/uday/javelin-tracker:<version> .
-docker run --rm -e JAVELIN_TRACKER_BOOTSTRAP_DEMO=1 ghcr.io/uday/javelin-tracker:<version> summary
-docker push ghcr.io/uday/javelin-tracker:<version>
+docker build -t ghcr.io/uday/throws-tracker:<version> .
+docker run --rm -e THROWS_TRACKER_BOOTSTRAP_DEMO=1 ghcr.io/uday/throws-tracker:<version> summary
+docker push ghcr.io/uday/throws-tracker:<version>
 ```
 
 - `/data` is declared as a volume; publish usage instructions so operators bind-mount persistent storage.
-- The entrypoint seeds demo data automatically when `JAVELIN_TRACKER_BOOTSTRAP_DEMO=1`, which is useful for smoke validation in container registries.
+- The entrypoint seeds demo data automatically when `THROWS_TRACKER_BOOTSTRAP_DEMO=1` (legacy env names also work), which is useful for smoke validation in container registries.
 
 ### 6. Post-release
 

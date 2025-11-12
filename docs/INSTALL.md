@@ -13,10 +13,10 @@ These instructions cover the most common deployment targets. The CLI supports Py
 ```bash
 # global environment (virtual environments still encouraged)
 python -m pip install --upgrade pip
-pip install javelin-tracker
+pip install throws-tracker  # package formerly published as javelin-tracker
 
 # isolated CLI using pipx
-pipx install javelin-tracker
+pipx install throws-tracker
 ```
 
 After installation, confirm the binary is available:
@@ -41,10 +41,10 @@ pip install -e ".[dev]"
 ### 4. Data directory & configuration
 
 - Default storage lives in `<repo>/data/sessions.json`. This path is ignored by git.
-- Override the location via `export JAVELIN_TRACKER_DATA_DIR=/secure/storage/path`.
-- Provide `JAVELIN_TRACKER_SESSIONS_FILE` if you prefer a custom filename.
-- Set `JAVELIN_TRACKER_ROLE=athlete` (plus `JAVELIN_TRACKER_DEFAULT_ATHLETE=<id>`) on shared workstations so the CLI automatically scopes to a single athlete. Leave unset (coach mode) to view every athlete.
-- Use `JAVELIN_TRACKER_ENV=production` on servers to enable safeguards such as seed-command blocking (requires `--allow-production` overrides).
+- Override the location via `export THROWS_TRACKER_DATA_DIR=/secure/storage/path` (legacy `JAVELIN_TRACKER_DATA_DIR` still works).
+- Provide `THROWS_TRACKER_SESSIONS_FILE` if you prefer a custom filename.
+- Set `THROWS_TRACKER_ROLE=athlete` (plus `THROWS_TRACKER_DEFAULT_ATHLETE=<id>`) on shared workstations so the CLI automatically scopes to a single athlete. Leave unset (coach mode) to view every athlete.
+- Use `THROWS_TRACKER_ENV=production` on servers to enable safeguards such as seed-command blocking (requires `--allow-production` overrides).
 
 ### 5. Smoke test
 
