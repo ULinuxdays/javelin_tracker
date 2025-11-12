@@ -167,7 +167,7 @@ def validate_duration(value: Any, *, field: str = "duration_minutes") -> float:
     return coerce_number(value, field=field, minimum=0.0)
 
 
-@dataclass(slots=True)
+@dataclass
 class Session:
     """Lightweight record capturing a single training session."""
 
