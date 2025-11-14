@@ -3,8 +3,8 @@
 Command-line toolkit for capturing throwing sessions, analysing workload, and generating coaching/research reports across javelin, discus, shot, hammer (plus custom events).
 
 [![CI](https://github.com/uday/Javelin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/uday/Javelin/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/throws-tracker.svg?label=PyPI&logo=pypi)](https://pypi.org/project/throws-tracker/)
-[![Python](https://img.shields.io/pypi/pyversions/throws-tracker.svg?logo=python)](pyproject.toml)
+[![PyPI](https://img.shields.io/badge/PyPI-not--published-lightgrey?logo=pypi)](#installation)
+[![Python](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue?logo=python)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-yellow.svg)](CHANGELOG.md)
 
