@@ -4,6 +4,7 @@ import tempfile
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -14,13 +15,15 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from .config import as_dict as config_as_dict
 from .metrics import compute_daily_metrics, compute_weekly_summary, sessions_to_dataframe
-from .models import Session
+from .models import CURRENT_SCHEMA_VERSION, Session
 
 
 @dataclass(frozen=True)
 class WeeklyReportStats:
     athlete: str
+    event: str
     team: str | None
     brand_line: str | None
     week_label: str
@@ -29,6 +32,7 @@ class WeeklyReportStats:
     session_count: int
     best_throw: float
     total_load: float
+    average_load: float | None
     average_rpe: float | None
     throw_volume: int
     acwr_rolling: float | None
@@ -36,19 +40,25 @@ class WeeklyReportStats:
     risk_flag: str
     high_risk_dates: list[date]
     risk_rows: list[dict[str, Any]]
+    personal_best: float | None
+    personal_best_date: date | None
+    schema_version: int
+    config_snapshot: dict[str, Any]
+    app_version: str
 
 
 def generate_weekly_report(
     sessions: Sequence[Mapping[str, Any] | Session],
     *,
     athlete: str,
+    events: Sequence[str] | None = None,
     week_ending: date | None = None,
     output_dir: Path = Path("reports"),
     team_name: str | None = None,
     school_name: str | None = None,
-) -> Path:
+) -> list[Path]:
     """
-    Build a weekly PDF report include workload metrics, plots, and risk highlights.
+    Build weekly PDF reports per event with workload metrics, plots, and risk highlights.
     """
 
     df_sessions = sessions_to_dataframe(sessions)
@@ -67,33 +77,67 @@ def generate_weekly_report(
         team_scope = non_empty_teams.iloc[0] if not non_empty_teams.empty else None
 
     week_start, week_end = _resolve_week_range(week_ending)
-    df_week = _slice_week(df_sessions, week_start, week_end)
-    if df_week.empty:
-        raise ValueError("No sessions recorded during the requested week.")
+    config_snapshot = config_as_dict()
+    app_version = _app_version()
 
-    daily_metrics = compute_daily_metrics(df_sessions, group_keys=["athlete"])
-    weekly_metrics = compute_weekly_summary(df_sessions, daily_metrics, group_keys=["athlete"])
-    stats = _extract_weekly_stats(
-        df_week,
-        daily_metrics,
-        weekly_metrics,
-        week_end,
-        athlete=athlete,
-        team=team_scope,
-        brand_line=_compose_brand_line(athlete, team_scope, school_name),
-    )
+    available_events = sorted({str(event).strip().lower() for event in df_sessions["event"].unique()})
+    requested_events = [event.strip().lower() for event in events] if events else available_events
+    if not requested_events:
+        requested_events = available_events
+
+    targets: list[str] = []
+    for event in requested_events:
+        if event == "all":
+            targets.append("all")
+            continue
+        if event not in available_events:
+            raise ValueError(f"No sessions found for event '{event}'.")
+        targets.append(event)
+    if not targets:
+        raise ValueError("No events available for the weekly report.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    slug = _slugify(athlete)
-    pdf_path = output_dir / f"weekly_{slug}_{stats.week_start.isoformat()}_{stats.week_end.isoformat()}.pdf"
+    brand_line = _compose_brand_line(athlete, team_scope, school_name)
+    output_paths: list[Path] = []
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_dir_path = Path(tmp_dir)
-        session_plot = _create_weekly_load_plot(df_week, tmp_dir_path)
-        risk_plot = _create_acwr_risk_figure(tmp_dir_path)
-        _build_pdf(pdf_path, stats, session_plot, risk_plot, df_week)
+    for event in targets:
+        event_df = df_sessions if event == "all" else df_sessions[df_sessions["event"] == event]
+        if event_df.empty:
+            continue
+        df_week = _slice_week(event_df, week_start, week_end)
+        if df_week.empty:
+            if events:
+                raise ValueError(f"No sessions recorded for event '{event}' during the requested week.")
+            continue
 
-    return pdf_path
+        daily_metrics = compute_daily_metrics(event_df, group_keys=["athlete"])
+        weekly_metrics = compute_weekly_summary(event_df, daily_metrics, group_keys=["athlete"])
+        stats = _extract_weekly_stats(
+            df_week,
+            daily_metrics,
+            weekly_metrics,
+            week_end,
+            athlete=athlete,
+            event=event,
+            team=team_scope,
+            brand_line=brand_line,
+            personal_best=_event_personal_best(event_df),
+            schema_version=_schema_version(event_df),
+            app_version=app_version,
+            config_snapshot=config_snapshot,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_dir_path = Path(tmp_dir)
+            distance_plot = _create_weekly_distance_plot(df_week, tmp_dir_path, event)
+            volume_plot = _create_weekly_volume_plot(df_week, tmp_dir_path, event)
+            pdf_path = output_dir / f"weekly_{_slugify(athlete)}_{_slugify(event)}_{stats.week_end.isoformat()}.pdf"
+            _build_pdf(pdf_path, stats, distance_plot, volume_plot, df_week)
+            output_paths.append(pdf_path)
+
+    if not output_paths:
+        raise ValueError("No sessions recorded during the requested week.")
+    return output_paths
 
 
 def _resolve_week_range(week_ending: date | None) -> tuple[date, date]:
@@ -121,8 +165,13 @@ def _extract_weekly_stats(
     week_end: date,
     *,
     athlete: str,
+    event: str,
     team: str | None,
     brand_line: str | None,
+    personal_best: tuple[date, float] | None,
+    schema_version: int,
+    app_version: str,
+    config_snapshot: dict[str, Any],
 ) -> WeeklyReportStats:
     week_iso = date.isocalendar(week_end)
     week_label = f"{week_iso.year}-W{week_iso.week:02d}"
@@ -132,6 +181,8 @@ def _extract_weekly_stats(
     summary_row = weekly_metrics.loc[
         (weekly_metrics["label"] == week_label) & (weekly_metrics["athlete"].str.lower() == athlete_name.lower())
     ].copy()
+    if "event" in summary_row.columns and event != "all":
+        summary_row = summary_row.loc[summary_row["event"] == event]
     if summary_row.empty:
         raise ValueError("Could not locate aggregated metrics for the requested week.")
     summary = summary_row.iloc[0]
@@ -162,17 +213,22 @@ def _extract_weekly_stats(
     ]
 
     avg_rpe = df_week["rpe"].dropna()
+    session_count = int(summary["sessions"])
+    total_load = float(summary["total_load"])
+    avg_load = total_load / session_count if session_count else None
 
     return WeeklyReportStats(
         athlete=athlete_name,
+        event=event,
         team=team_name,
         brand_line=brand_line,
         week_label=week_label,
         week_start=pd.Timestamp(summary["start_date"]).date(),
         week_end=pd.Timestamp(summary["end_date"]).date(),
-        session_count=int(summary["sessions"]),
+        session_count=session_count,
         best_throw=float(summary["best_throw"]),
-        total_load=float(summary["total_load"]),
+        total_load=total_load,
+        average_load=avg_load,
         average_rpe=float(avg_rpe.mean()) if not avg_rpe.empty else None,
         throw_volume=int(summary["throw_volume"]),
         acwr_rolling=_safe_float(summary["acwr_rolling"]),
@@ -180,20 +236,25 @@ def _extract_weekly_stats(
         risk_flag=str(summary["risk_flag"] or ""),
         high_risk_dates=high_risk_dates,
         risk_rows=risk_rows,
+        personal_best=personal_best[1] if personal_best else None,
+        personal_best_date=personal_best[0] if personal_best else None,
+        schema_version=schema_version,
+        config_snapshot=config_snapshot,
+        app_version=app_version,
     )
 
 
-def _create_weekly_load_plot(df_week: pd.DataFrame, tmp_dir: Path) -> Path:
+def _create_weekly_distance_plot(df_week: pd.DataFrame, tmp_dir: Path, event: str) -> Path:
     import matplotlib.pyplot as plt
 
-    plot_path = tmp_dir / "weekly_load.png"
+    plot_path = tmp_dir / f"weekly_distance_{_slugify(event)}.png"
     ordered = df_week.sort_values("date")
     fig, ax = plt.subplots()
-    ax.bar(ordered["date"].dt.date, ordered["load"], color="#4C72B0")
-    ax.set_title("Session Loads (AU)")
+    ax.plot(ordered["date"].dt.date, ordered["best"], marker="o", linewidth=2, color="#1F3C88")
+    ax.set_title(f"Best Distance ({_format_event_label(event)})")
     ax.set_xlabel("Date")
-    ax.set_ylabel("Load (RPE × duration)")
-    ax.grid(axis="y", linestyle="--", alpha=0.4)
+    ax.set_ylabel("Distance (m)")
+    ax.grid(True, linestyle="--", alpha=0.3)
     fig.autofmt_xdate()
     fig.tight_layout()
     fig.savefig(plot_path, dpi=150)
@@ -201,30 +262,26 @@ def _create_weekly_load_plot(df_week: pd.DataFrame, tmp_dir: Path) -> Path:
     return plot_path
 
 
-def _create_acwr_risk_figure(tmp_dir: Path) -> Path:
+def _create_weekly_volume_plot(df_week: pd.DataFrame, tmp_dir: Path, event: str) -> Path:
     import matplotlib.pyplot as plt
-    import numpy as np
 
-    risk_path = tmp_dir / "acwr_risk.png"
-    acwr_values = np.linspace(0.5, 2.0, 200)
-    # Model a simple logistic curve for injury likelihood
-    risk = 1 / (1 + np.exp(-6 * (acwr_values - 1.3)))
-
+    volume_path = tmp_dir / f"weekly_volume_{_slugify(event)}.png"
+    daily_volume = (
+        df_week.groupby(df_week["date"].dt.date)["throws_count"]
+        .sum()
+        .sort_index()
+    )
     fig, ax = plt.subplots()
-    ax.plot(acwr_values, risk, color="#C92A2A", linewidth=2)
-    ax.axvspan(0.8, 1.3, color="#51CF66", alpha=0.2, label="Low-risk zone (0.8–1.3)")
-    ax.axvspan(0.0, 0.8, color="#FCC419", alpha=0.15, label="Underload")
-    ax.axvspan(1.5, 2.0, color="#FF6B6B", alpha=0.2, label="High-risk spike (>1.5)")
-    ax.set_xlabel("ACWR")
-    ax.set_ylabel("Relative Injury Likelihood")
-    ax.set_title("ACWR vs. Injury Risk (illustrative)")
-    ax.set_ylim(0, 1.05)
-    ax.legend(loc="upper left")
-    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.bar([day.strftime("%a %d") for day in daily_volume.index], daily_volume.values, color="#4C72B0")
+    ax.set_title(f"Throw Volume ({_format_event_label(event)})")
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Throws Recorded")
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+    ax.grid(axis="y", linestyle="--", alpha=0.4)
     fig.tight_layout()
-    fig.savefig(risk_path, dpi=150)
+    fig.savefig(volume_path, dpi=150)
     plt.close(fig)
-    return risk_path
+    return volume_path
 
 
 def _compose_brand_line(athlete: str, team: str | None, school: str | None) -> str | None:
@@ -238,17 +295,28 @@ def _slugify(value: str) -> str:
     return slug or "athlete"
 
 
+def _format_event_label(value: str | None) -> str:
+    text = (value or "").replace("_", " ").strip() or "all events"
+    return text.title()
+
+
 def _build_pdf(
     destination: Path,
     stats: WeeklyReportStats,
-    session_plot: Path,
-    risk_plot: Path,
+    distance_plot: Path,
+    volume_plot: Path,
     df_week: pd.DataFrame,
 ) -> None:
     story = []
     styles = getSampleStyleSheet()
 
-    story.append(Paragraph(f"Weekly Summary: {stats.week_start} – {stats.week_end}", styles["Title"]))
+    event_label = _format_event_label(stats.event)
+    story.append(
+        Paragraph(
+            f"{event_label} Weekly Summary: {stats.week_start} – {stats.week_end}",
+            styles["Title"],
+        )
+    )
     if stats.brand_line:
         story.append(Paragraph(stats.brand_line, styles["Heading4"]))
     story.append(
@@ -258,21 +326,39 @@ def _build_pdf(
             styles["BodyText"],
         )
     )
-    story.append(Spacer(1, 0.2 * inch))
-
-    avg_rpe_text = f"{stats.average_rpe:.1f}" if stats.average_rpe is not None else "n/a"
-    summary_text = (
-        f"Recorded {stats.session_count} sessions with {stats.throw_volume} throws. "
-        f"Total load was {stats.total_load:.1f} AU with average RPE {avg_rpe_text}."
+    story.append(
+        Paragraph(
+            f"App v{stats.app_version} | Schema v{stats.schema_version}",
+            styles["BodyText"],
+        )
     )
-    story.append(Paragraph(summary_text, styles["BodyText"]))
+
+    allowed_events = ", ".join(stats.config_snapshot.get("allowed_events", []))
+    thresholds = stats.config_snapshot.get("acwr_thresholds", {})
+    story.append(
+        Paragraph(
+            "Config source: "
+            f"{stats.config_snapshot.get('source')} | Allowed events: {allowed_events or 'n/a'} | "
+            f"ACWR sweet zone {thresholds.get('sweet_min', 0.8)}–{thresholds.get('sweet_max', 1.3)} (high>{thresholds.get('high', 1.5)})",
+            styles["BodyText"],
+        )
+    )
+    story.append(Spacer(1, 0.2 * inch))
 
     table_data = [
         ["Metric", "Value"],
-        ["Best Throw (m)", f"{stats.best_throw:.2f}"],
-        ["Total Load (AU)", f"{stats.total_load:.1f}"],
-        ["Average RPE", f"{stats.average_rpe:.1f}" if stats.average_rpe is not None else "n/a"],
+        [
+            "Personal Best (m)",
+            f"{stats.personal_best:.2f} ({stats.personal_best_date})"
+            if stats.personal_best and stats.personal_best_date
+            else "n/a",
+        ],
+        ["Week PB (m)", f"{stats.best_throw:.2f}"],
+        ["Sessions", str(stats.session_count)],
         ["Throw Volume", str(stats.throw_volume)],
+        ["Total Load (AU)", f"{stats.total_load:.1f}"],
+        ["Avg Load (AU)", f"{stats.average_load:.1f}" if stats.average_load is not None else "n/a"],
+        ["Average RPE", f"{stats.average_rpe:.1f}" if stats.average_rpe is not None else "n/a"],
         ["Rolling ACWR", f"{stats.acwr_rolling:.2f}" if stats.acwr_rolling is not None else "n/a"],
         ["EWMA ACWR", f"{stats.acwr_ewma:.2f}" if stats.acwr_ewma is not None else "n/a"],
         ["Risk Flag", stats.risk_flag or "LOW"],
@@ -334,12 +420,11 @@ def _build_pdf(
         story.append(risk_table)
         story.append(Spacer(1, 0.3 * inch))
 
-    story.append(Paragraph("Session Loads", styles["Heading2"]))
-    story.append(Image(str(session_plot), width=6.5 * inch, height=3.5 * inch))
-
+    story.append(Paragraph("Distance vs Date", styles["Heading2"]))
+    story.append(Image(str(distance_plot), width=6.5 * inch, height=3.5 * inch))
     story.append(Spacer(1, 0.3 * inch))
-    story.append(Paragraph("ACWR Risk Zones", styles["Heading2"]))
-    story.append(Image(str(risk_plot), width=6.5 * inch, height=3.0 * inch))
+    story.append(Paragraph("Weekly Throw Volume", styles["Heading2"]))
+    story.append(Image(str(volume_plot), width=6.5 * inch, height=3.0 * inch))
 
     if stats.high_risk_dates:
         risk_dates = ", ".join(date.isoformat() for date in stats.high_risk_dates)
@@ -374,3 +459,26 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _event_personal_best(df_sessions: pd.DataFrame) -> tuple[date, float] | None:
+    if df_sessions.empty or "best" not in df_sessions:
+        return None
+    idx = df_sessions["best"].idxmax()
+    if pd.isna(idx):
+        return None
+    row = df_sessions.loc[idx]
+    return (pd.Timestamp(row["date"]).date(), float(row["best"]))
+
+
+def _schema_version(df_sessions: pd.DataFrame) -> int:
+    if "schema_version" not in df_sessions or df_sessions["schema_version"].dropna().empty:
+        return CURRENT_SCHEMA_VERSION
+    return int(df_sessions["schema_version"].dropna().max())
+
+
+def _app_version() -> str:
+    try:
+        return metadata.version("throws-tracker")
+    except metadata.PackageNotFoundError:  # pragma: no cover - local dev fallback
+        return "0.0.0"

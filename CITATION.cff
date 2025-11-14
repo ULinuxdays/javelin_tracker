@@ -1,9 +1,9 @@
 cff-version: 1.2.0
-title: "Javelin Tracker"
+title: "Throws Tracker"
 version: "0.1.0"
 type: "software"
-abstract: "Tools for tracking and analyzing javelin training workload, ACWR, and performance."
-message: "If you use Javelin Tracker in your research or coaching workflows, please cite it using the metadata below."
+abstract: "Tools for logging multi-event throwing sessions, analyzing workload/ACWR, and generating performance reports."
+message: "If you use Throws Tracker in your research or coaching workflows, please cite it using the metadata below."
 url: "https://github.com/uday/Javelin"
 repository-code: "https://github.com/uday/Javelin"
 license: "MIT"
@@ -13,6 +13,7 @@ authors:
     affiliation: "Independent Developer"
 keywords:
   - sports science
+  - throws
   - javelin
   - training load
   - ACWR

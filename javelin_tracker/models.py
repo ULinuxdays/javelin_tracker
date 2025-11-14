@@ -4,6 +4,30 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+CURRENT_SCHEMA_VERSION = 2
+DEFAULT_EVENT = "javelin"
+STRENGTH_EXERCISES = {
+    "back squat",
+    "front squat",
+    "overhead squat",
+    "deadlift",
+    "romanian deadlift",
+    "bench press",
+    "incline bench press",
+    "push press",
+    "snatch",
+    "clean",
+    "clean and jerk",
+    "jerk",
+    "pull-up",
+    "chin-up",
+    "row",
+    "split squat",
+    "hip thrust",
+    "lunge",
+    "press",
+}
+
 __all__ = [
     "parse_iso_date",
     "coerce_number",
@@ -12,7 +36,13 @@ __all__ = [
     "parse_throws",
     "parse_tags",
     "validate_duration",
+    "calculate_bmi",
+    "calculate_session_load",
+    "is_strength_exercise",
     "Session",
+    "Athlete",
+    "WorkoutExercise",
+    "WorkoutRoutine",
     "ValidationError",
 ]
 
@@ -167,19 +197,45 @@ def validate_duration(value: Any, *, field: str = "duration_minutes") -> float:
     return coerce_number(value, field=field, minimum=0.0)
 
 
-@dataclass(slots=True)
+def calculate_bmi(height_cm: float, weight_kg: float) -> float:
+    """Compute Body Mass Index (kg/m^2) from centimetres and kilograms."""
+    height_m = height_cm / 100.0
+    if height_m <= 0:
+        raise ValidationError("height_cm must be positive to compute BMI.")
+    return weight_kg / (height_m**2)
+
+
+def calculate_session_load(rpe: Any | None, duration_minutes: float) -> float:
+    """Compute the classic session load (RPE × duration) or zero when not applicable."""
+    if rpe is None:
+        return 0.0
+    try:
+        rpe_value = float(coerce_number(rpe, field="rpe"))
+    except ValidationError:
+        return 0.0
+    if duration_minutes <= 0:
+        return 0.0
+    return rpe_value * float(duration_minutes)
+
+
+@dataclass
 class Session:
     """Lightweight record capturing a single training session."""
 
     date: date
     best: float
     athlete: str
+    event: str
     team: Optional[str] = None
     throws: List[float] = field(default_factory=list)
     rpe: Optional[int] = None
     duration_minutes: float = 0.0
     notes: Optional[str] = None
     tags: List[str] = field(default_factory=list)
+    implement_weight_kg: Optional[float] = None
+    technique: Optional[str] = None
+    fouls: Optional[int] = None
+    schema_version: int = CURRENT_SCHEMA_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
         """Make the session JSON serialisable."""
@@ -187,15 +243,88 @@ class Session:
             "date": self.date.isoformat(),
             "best": self.best,
             "athlete": self.athlete,
+            "event": self.event,
             "throws": self.throws,
+            "duration_minutes": self.duration_minutes,
+            "load": calculate_session_load(self.rpe, self.duration_minutes),
+            "schema_version": self.schema_version,
         }
         if self.team:
             payload["team"] = self.team
         if self.rpe is not None:
             payload["rpe"] = self.rpe
-        payload["duration_minutes"] = self.duration_minutes
         if self.notes:
             payload["notes"] = self.notes
         if self.tags:
             payload["tags"] = self.tags
+        if self.implement_weight_kg is not None:
+            payload["implement_weight_kg"] = self.implement_weight_kg
+        if self.technique:
+            payload["technique"] = self.technique
+        if self.fouls is not None:
+            payload["fouls"] = self.fouls
         return payload
+
+
+@dataclass
+class Athlete:
+    """Structured representation of a thrower with strength and distance history."""
+
+    name: str
+    height_cm: float
+    weight_kg: float
+    strength_benchmarks: dict[str, float] = field(default_factory=dict)
+    throw_distances: dict[str, list[float]] = field(default_factory=dict)
+    notes: Optional[str] = None
+
+    @property
+    def bmi(self) -> float:
+        """Body Mass Index derived from height/weight (kg/m^2)."""
+        try:
+            return calculate_bmi(self.height_cm, self.weight_kg)
+        except ValidationError:
+            return float("nan")
+
+
+@dataclass
+class WorkoutExercise:
+    """A single exercise prescription inside a workout routine."""
+
+    name: str
+    sets: int
+    reps: int
+    load: Optional[float] = None  # kilograms or %1RM scaled values
+    is_strength: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.is_strength is None:
+            self.is_strength = is_strength_exercise(self.name)
+
+
+@dataclass
+class WorkoutRoutine:
+    """Collection of exercises, sets, and reps for a training session."""
+
+    title: str
+    focus: Optional[str] = None
+    exercises: list[WorkoutExercise] = field(default_factory=list)
+    notes: Optional[str] = None
+
+    def add_exercise(self, exercise: WorkoutExercise) -> None:
+        self.exercises.append(exercise)
+
+
+def is_strength_exercise(name: str) -> bool:
+    """
+    Determine whether an exercise should be tracked as a strength lift.
+
+    Returns True for heavy compound movements that should be logged, False for
+    accessories such as cardio, mobility, or recovery work.
+    """
+    normalized = (name or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized in STRENGTH_EXERCISES:
+        return True
+    keywords = ("squat", "deadlift", "press", "pull", "snatch", "clean", "jerk", "row")
+    return any(token in normalized for token in keywords)

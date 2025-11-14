@@ -1,21 +1,21 @@
 ## Data Protection & Privacy Checklist
 
-This project manages training information for identifiable student-athletes. Use the following safeguards whenever you deploy Javelin Tracker in academic or athletic environments.
+This project manages training information for identifiable student-athletes. Use the following safeguards whenever you deploy Throws Tracker in academic or athletic environments (legacy Javelin Tracker installations remain compatible).
 
 ### 1. Data Classification & Storage
 
 - Treat *all* session data (dates, notes, best throws, workload metrics) as education records protected under FERPA/GDPR equivalents.
-- Configure secure storage using `JAVELIN_TRACKER_DATA_DIR` or `JAVELIN_TRACKER_SESSIONS_FILE` so logs live on approved drives with access controls.
+- Configure secure storage using `THROWS_TRACKER_DATA_DIR` or `THROWS_TRACKER_SESSIONS_FILE` (legacy env names with the `JAVELIN_` prefix still work) so logs live on approved drives with access controls.
 - Keep repositories (`git`) free of raw data. The default `data/` directory is ignored; do not change this setting when working with live athletes.
 
 ### 2. Roles & Least-Privilege Access
 
-- Set `JAVELIN_TRACKER_ROLE=athlete` on personal devices to force CLI commands to scope automatically to the user’s own athlete ID. Pair this with `JAVELIN_TRACKER_DEFAULT_ATHLETE` to lock the CLI to a single profile.
+- Set `THROWS_TRACKER_ROLE=athlete` on personal devices to force CLI commands to scope automatically to the user’s own athlete ID. Pair this with `THROWS_TRACKER_DEFAULT_ATHLETE` to lock the CLI to a single profile.
 - Keep the default `coach` behaviour for analysts who need multi-athlete rollups; ensure they understand the privacy obligations for cross-athlete comparisons.
 
 ### 3. Production Safeguards
 
-- Use `JAVELIN_TRACKER_ENV=production` on managed servers. The CLI blocks seed/demo commands unless `--allow-production` is passed explicitly, reducing the risk of overwriting live data.
+- Use `THROWS_TRACKER_ENV=production` on managed servers. The CLI blocks seed/demo commands unless `--allow-production` is passed explicitly, reducing the risk of overwriting live data.
 - Audit cron jobs or CI runners to confirm they do **not** run destructive commands (seed, delete, etc.) without the `--allow-production` flag.
 
 ### 4. Anonymisation & Demo Data
