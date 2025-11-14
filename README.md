@@ -1,4 +1,4 @@
-# Throws Tracker
+# Throws Tracker By Uday Thakran
 
 Command-line toolkit for capturing throwing sessions, analysing workload, and generating coaching/research reports across javelin, discus, shot, hammer (plus custom events).
 
