@@ -15,7 +15,9 @@ from .models import (
     validate_distance,
 )
 
-SessionInput = Mapping[str, Any] | Session
+# Python 3.9-compatible runtime type alias (avoid PEP 604 union at runtime)
+from typing import Union as _Union
+SessionInput = _Union[Mapping[str, Any], Session]
 SessionRecord = Dict[str, Any]
 Group = Dict[str, List[SessionRecord]]
 
