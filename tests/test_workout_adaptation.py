@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
-import pytest
-
 from javelin_tracker.storage import (
     get_daily_routine,
     log_strength_workout,

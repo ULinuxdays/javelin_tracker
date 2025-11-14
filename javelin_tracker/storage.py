@@ -574,6 +574,25 @@ def adjust_workload(
                 "suggestions": throw_suggestions,
             }
 
+    # Add readiness multipliers (0.9–1.1) derived from slopes and deltas for more nuanced dosing.
+    def _clip(x: float, lo: float, hi: float) -> float:
+        return max(lo, min(hi, x))
+
+    strength_slope = strength_info.get("trend_slope_per_day") or 0.0
+    throw_slope = throw_info.get("trend_slope_per_day") or 0.0
+    strength_delta = (strength_info.get("load_change_pct") or 0.0) / 100.0
+    throw_delta = (throw_info.get("distance_change_pct") or 0.0) / 100.0
+
+    # Convert to soft multipliers: small increases for upward trends, small decreases for downward trends.
+    strength_factor = 1.0 + _clip(0.5 * strength_delta + 0.0005 * strength_slope, -0.1, 0.1)
+    throw_factor = 1.0 + _clip(0.5 * throw_delta + 0.0005 * throw_slope, -0.1, 0.1)
+
+    recommendations["strength"]["readiness_multiplier"] = round(strength_factor, 3)
+    recommendations["throws"]["readiness_multiplier"] = round(throw_factor, 3)
+
+    # Flag deload when trends decline notably
+    recommendations["deload"] = bool((strength_delta < -0.05) or (throw_delta < -0.03))
+
     return recommendations
 
 
@@ -614,7 +633,9 @@ def generate_workout(
     trends = analyze_trends(athlete_id) if athlete_id else None
     throw_trend_info = trends.get("throws") if trends else {}
     workload = adjust_workload(profile, trends) if trends else {}
+    # Optional per-lift suggestions (kept for compatibility)
     strength_adjustments = workload.get("strength", {}).get("suggestions", {})
+    _ = strength_adjustments
 
     # Adjust training intensity for higher BMI athletes to manage joint load.
     bmi_modifier = 1.0
@@ -623,44 +644,100 @@ def generate_workout(
     elif bmi and bmi <= 20:
         bmi_modifier = 1.05
 
-    template = [
-        ("back squat", 4, (8, 12), 0.65),
-        ("bench press", 3, (8, 12), 0.60),
-        ("deadlift", 3, (6, 10), 0.70),
-        ("push press", 3, (8, 12), 0.55),
-    ]
+    # Daily undulating variation: heavy / moderate / light based on weekday.
+    today = _now_utc().date() if session_date is None else (
+        session_date.date() if isinstance(session_date, datetime) else session_date
+    )
+    try:
+        weekday = today.weekday()  # 0=Mon
+    except Exception:
+        weekday = 0
+
+    if weekday in (0, 3):  # Mon/Thu: strength focus
+        rep_schemes = {
+            "back squat": (4, 6, 2),  # sets, reps, RIR
+            "bench press": (4, 6, 2),
+            "deadlift": (3, 5, 2),
+            "push press": (4, 5, 2),
+        }
+    elif weekday in (1, 5):  # Tue/Sat: power/speed
+        rep_schemes = {
+            "back squat": (5, 3, 3),
+            "bench press": (6, 3, 3),
+            "deadlift": (4, 3, 3),
+            "push press": (6, 3, 2),
+        }
+    else:  # Wed/Fri/Sun: hypertrophy/technique
+        rep_schemes = {
+            "back squat": (4, 10, 3),
+            "bench press": (4, 10, 3),
+            "deadlift": (3, 8, 3),
+            "push press": (3, 8, 3),
+        }
+
+    template = list(rep_schemes.items())  # (name, (sets, reps, RIR))
 
     session_plan: list[dict[str, Any]] = []
-    for name, sets, rep_range, pct in template:
-        max_lift = benchmarks.get(name)
-        if isinstance(max_lift, str):
+    readiness_mult = (workload.get("strength", {}) or {}).get("readiness_multiplier", 1.0)
+    deload = workload.get("deload", False)
+    strength_scale = readiness_mult * (0.92 if deload else 1.0) * bmi_modifier
+
+    # Helper to estimate 1RM from logs if no benchmark present.
+    def _estimate_one_rm(exercise: str) -> float | None:
+        value = benchmarks.get(exercise)
+        try:
+            if isinstance(value, str):
+                value = float(value)
+        except ValueError:
+            value = None
+        if value and value > 0:
+            # Treat benchmark as best set load; approximate 1RM conservatively by +10%.
+            return float(value) * 1.10
+        # Fall back to log-derived estimate
+        try:
+            with open_database(readonly=True) as conn:
+                rows = conn.execute(
+                    "SELECT load_kg, reps FROM StrengthLogs WHERE athlete_id = ? AND exercise = ? AND load_kg IS NOT NULL AND reps IS NOT NULL",
+                    (athlete_id, exercise),
+                ).fetchall()
+        except Exception:
+            rows = []
+        ests: list[float] = []
+        for load, reps in rows:
             try:
-                max_lift = float(max_lift)
-            except ValueError:
-                max_lift = None
-        min_reps, max_reps = rep_range
-        avg_reps = int((min_reps + max_reps) / 2)
-        if max_lift:
-            target_max = strength_adjustments.get(name, {}).get("target_max", max_lift)
-            training_weight = target_max * pct * bmi_modifier
+                load_v = float(load)
+                reps_v = int(reps)
+            except (TypeError, ValueError):
+                continue
+            # Epley: 1RM ≈ w * (1 + r/30)
+            ests.append(load_v * (1.0 + reps_v / 30.0))
+        return max(ests) if ests else None
+
+    for name, (sets, target_reps, rir) in template:
+        one_rm = _estimate_one_rm(name)
+        if one_rm:
+            # Compute training weight targeting RIR using Epley inverse: w = 1RM / (1 + (reps+RIR)/30)
+            denom = 1.0 + (target_reps + max(0, int(rir))) / 30.0
+            base_weight = one_rm / denom
+            training_weight = max(0.0, base_weight * strength_scale)
             session_plan.append(
                 {
                     "name": name,
                     "sets": sets,
-                    "reps": avg_reps,
-                    "rep_range": rep_range,
+                    "reps": target_reps,
+                    "rir_target": rir,
                     "target_weight_kg": round(training_weight, 1),
-                    "intensity_pct_1rm": round(pct * 100, 1),
+                    "intensity_pct_1rm": round((training_weight / one_rm) * 100.0, 1),
                     "is_strength": True,
                 }
             )
         else:
+            # Bodyweight tempo fallback
             session_plan.append(
                 {
                     "name": f"Tempo {name.title()} (bodyweight)",
                     "sets": sets,
-                    "reps": avg_reps + 2,
-                    "rep_range": rep_range,
+                    "reps": target_reps + 2,
                     "target_weight_kg": None,
                     "is_strength": True,
                 }
@@ -677,7 +754,7 @@ def generate_workout(
         ]
     )
 
-    # Event-specific target derived from throw history.
+    # Event-specific target derived from throw history and readiness.
     if throw_history:
         primary_event = max(
             throw_history.items(),
@@ -697,7 +774,8 @@ def generate_workout(
             increment_pct = workload.get("throws", {}).get("suggestions", {}).get(
                 primary_event, {}
             ).get("increase_pct", 1.0)
-            target = best * (1 + increment_pct / 100.0)
+            throw_readiness = (workload.get("throws", {}) or {}).get("readiness_multiplier", 1.0)
+            target = best * (1 + (increment_pct / 100.0)) * throw_readiness
             session_plan.append(
                 {
                     "name": f"{primary_event.title()} technical session",
@@ -708,7 +786,15 @@ def generate_workout(
             )
             # Add weighted ball/implement drill scaling with best throw.
             throw_change = throw_trend_info.get("distance_change_pct")
-            drill_load_pct = 0.12 if throw_change and throw_change >= 2 else 0.15
+            # Heavier implements when plateau/downtrend; lighter for speed when trending up.
+            if throw_change is None:
+                drill_load_pct = 0.14
+            elif throw_change >= 2:
+                drill_load_pct = 0.10
+            elif throw_change <= -2:
+                drill_load_pct = 0.18
+            else:
+                drill_load_pct = 0.12
             if throw_change is None or throw_change <= 0:
                 drill_sets = 5
                 drill_reps = 6
@@ -865,49 +951,120 @@ def predict_trends(
     timestamps = np.array([(ts - series[0][0]).days for ts, _ in series], dtype=float)
     values = np.array([value for _, value in series], dtype=float)
 
-    model_type = "linear"
-    degree = 1
-    if len(series) >= 20:
-        model_type = "polyfit"
-        degree = 2
+    def _rmse(actual: np.ndarray, fit: np.ndarray) -> float:
+        if actual.size == 0 or fit.size == 0:
+            return float("nan")
+        return float(np.sqrt(np.mean((actual - fit) ** 2)))
 
-    if len(series) < 5:
-        model_type = "ema"
-
-    if model_type == "ema":
-        alpha = 2 / (min(5, len(series)) + 1)
-        ema = values[0]
-        ema_values = [ema]
-        for value in values[1:]:
-            ema = alpha * value + (1 - alpha) * ema
-            ema_values.append(ema)
-        fitted = np.array(ema_values)
-        forecast_base = series[-1][1]
-        forecasts = []
-        ema_future = fitted[-1]
+    def _forecast_holt(y: np.ndarray, m: int) -> tuple[np.ndarray, list[tuple[str, float]], float, float]:
+        alphas = [0.2, 0.3, 0.4, 0.5, 0.7]
+        betas = [0.1, 0.2, 0.3, 0.4]
+        best_alpha = 0.3
+        best_beta = 0.2
+        best_fit: np.ndarray | None = None
+        best_rmse = float("inf")
+        for a in alphas:
+            for b in betas:
+                if len(y) == 1:
+                    level_val = y[0]
+                    trend_val = 0.0
+                else:
+                    level_val = y[0]
+                    trend_val = y[1] - y[0]
+                preds = np.zeros_like(y)
+                preds[0] = y[0]
+                for i in range(1, len(y)):
+                    pred = level_val + trend_val
+                    preds[i] = pred
+                    prev_level = level_val
+                    level_val = a * y[i] + (1 - a) * (level_val + trend_val)
+                    trend_val = b * (level_val - prev_level) + (1 - b) * trend_val
+                err = _rmse(y, preds)
+                if err < best_rmse:
+                    best_rmse = err
+                    best_alpha = a
+                    best_beta = b
+                    best_fit = preds
+        if best_fit is None:
+            best_fit = y.copy()
+        if len(y) == 1:
+            level = y[0]
+            trend = 0.0
+        else:
+            level = y[0]
+            trend = y[1] - y[0]
+            for i in range(1, len(y)):
+                prev_level = level
+                level = best_alpha * y[i] + (1 - best_alpha) * (level + trend)
+                trend = best_beta * (level - prev_level) + (1 - best_beta) * trend
+        fc: list[tuple[str, float]] = []
+        last_date = series[-1][0]
         for step in range(1, days_ahead + 1):
-            ema_future = alpha * ema_future + (1 - alpha) * ema_future
-            target_date = series[-1][0] + timedelta(days=step)
-            forecasts.append((target_date.date().isoformat(), float(ema_future)))
-    else:
-        coeffs = np.polyfit(timestamps, values, deg=degree)
-        fitted = np.polyval(coeffs, timestamps)
-        last_index = timestamps[-1]
-        forecasts = []
+            pred = float(level + step * trend)
+            if pred < 0:
+                pred = 0.0
+            fc.append(((last_date + timedelta(days=step)).date().isoformat(), pred))
+        return best_fit, fc, best_rmse, trend
+
+    def _forecast_wls_linear(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, list[tuple[str, float]], float, float]:
+        n = len(x)
+        decay = 0.9
+        weights = np.power(decay, (n - 1 - np.arange(n))).astype(float)
+        w_sum = np.sum(weights)
+        x_bar = float(np.sum(weights * x) / w_sum)
+        y_bar = float(np.sum(weights * y) / w_sum)
+        denom = float(np.sum(weights * (x - x_bar) ** 2))
+        if denom == 0.0:
+            slope = 0.0
+        else:
+            slope = float(np.sum(weights * (x - x_bar) * (y - y_bar)) / denom)
+        intercept = y_bar - slope * x_bar
+        fitted = intercept + slope * x
+        rmse = _rmse(y, fitted)
+        last_index = x[-1]
+        fc: list[tuple[str, float]] = []
+        last_date = series[-1][0]
         for step in range(1, days_ahead + 1):
             future_x = last_index + step
-            predicted = np.polyval(coeffs, future_x)
-            target_date = series[-1][0] + timedelta(days=step)
-            forecasts.append((target_date.date().isoformat(), float(predicted)))
+            pred = float(intercept + slope * future_x)
+            if pred < 0:
+                pred = 0.0
+            fc.append(((last_date + timedelta(days=step)).date().isoformat(), pred))
+        return fitted, fc, rmse, slope
 
-    residuals = values - fitted
-    rmse = float(np.sqrt(np.mean(residuals**2))) if residuals.size else None
+    def _forecast_poly2(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, list[tuple[str, float]], float, float]:
+        coeffs = np.polyfit(x, y, deg=2)
+        fitted = np.polyval(coeffs, x)
+        rmse = _rmse(y, fitted)
+        last_index = x[-1]
+        fc: list[tuple[str, float]] = []
+        last_date = series[-1][0]
+        for step in range(1, days_ahead + 1):
+            future_x = last_index + step
+            pred = float(np.polyval(coeffs, future_x))
+            if pred < 0:
+                pred = 0.0
+            fc.append(((last_date + timedelta(days=step)).date().isoformat(), pred))
+        slope_now = float(2 * coeffs[0] * last_index + coeffs[1])
+        return fitted, fc, rmse, slope_now
+
+    candidates: list[tuple[str, np.ndarray, list[tuple[str, float]], float, float]] = []
+    holt_fit, holt_fc, holt_rmse, holt_slope = _forecast_holt(values, days_ahead)
+    candidates.append(("holt_linear", holt_fit, holt_fc, holt_rmse, holt_slope))
+    wls_fit, wls_fc, wls_rmse, wls_slope = _forecast_wls_linear(timestamps, values)
+    candidates.append(("linear_wls", wls_fit, wls_fc, wls_rmse, wls_slope))
+    if len(series) >= 20:
+        poly_fit, poly_fc, poly_rmse, poly_slope = _forecast_poly2(timestamps, values)
+        candidates.append(("poly2", poly_fit, poly_fc, poly_rmse, poly_slope))
+
+    best = min(candidates, key=lambda item: (float("inf") if np.isnan(item[3]) else item[3]))
+    best_model, best_fitted, forecasts, rmse, slope_est = best
 
     last_actual = values[-1]
     last_forecast = forecasts[-1][1] if forecasts else last_actual
-    if last_forecast > last_actual * 1.01:
+    if slope_est > 0 and last_forecast > last_actual * 1.005:
         trend_direction = "up"
-    elif last_forecast < last_actual * 0.99:
+    elif slope_est < 0 and last_forecast < last_actual * 0.995:
         trend_direction = "down"
     else:
         trend_direction = "flat"
@@ -915,7 +1072,7 @@ def predict_trends(
 
     return {
         "forecasts": forecasts,
-        "model": model_type,
+        "model": best_model,
         "confidence": rmse,
         "trend": trend_direction,
     }

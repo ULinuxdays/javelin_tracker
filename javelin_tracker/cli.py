@@ -846,12 +846,19 @@ def daily_routine(
 
 
 @app.command("predict")
+@app.command("forecast")
 def predict_metric(
-    athlete_id: int = typer.Option(
-        ...,
+    athlete_id: Optional[int] = typer.Option(
+        None,
         "--athlete-id",
         "-i",
-        help="Athlete ID for forecasting.",
+        help="Athlete ID for forecasting (resolves from --athlete or env if omitted).",
+    ),
+    athlete: Optional[str] = typer.Option(
+        None,
+        "--athlete",
+        "-a",
+        help="Athlete name to forecast for (looked up in DB; falls back to env default).",
     ),
     metric: str = typer.Option(
         ...,
@@ -865,23 +872,87 @@ def predict_metric(
         "-d",
         help="Number of days to forecast into the future.",
     ),
+    fmt: str = typer.Option(
+        "table",
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format: table, json, or csv.",
+    ),
+    to: Optional[Path] = typer.Option(
+        None,
+        "--to",
+        "-o",
+        help="Optional file path for JSON/CSV output (printed to stdout if omitted).",
+    ),
 ) -> None:
     """
     Forecast future performance for a given metric.
     """
-    forecast = predict_trends(athlete_id, metric, days_ahead=days_ahead)
-    if not forecast.get("forecasts"):
-        typer.echo("No forecast available (insufficient data).")
-        raise typer.Exit(code=1)
+    # Resolve athlete ID if not explicitly provided
+    resolved_id = athlete_id
+    if resolved_id is None:
+        candidate_name = _clean_identifier(athlete) or _default_athlete()
+        if candidate_name:
+            resolved_id = _lookup_athlete_id(candidate_name)
+        if resolved_id is None:
+            _fail("Provide --athlete-id or --athlete (or set THROWS_TRACKER_DEFAULT_ATHLETE).")
 
-    typer.echo(
-        f"Metric: {metric} | Model: {forecast['model']} | Trend: {forecast.get('trend')} "
-        f"| RMSE: {forecast.get('confidence')}"
-    )
-    typer.echo("Date        | Prediction")
-    typer.echo("-" * 30)
-    for date_str, value in forecast["forecasts"]:
-        typer.echo(f"{date_str} | {value:.2f}")
+    forecast = predict_trends(int(resolved_id), metric, days_ahead=days_ahead)
+
+    output_format = (fmt or "table").strip().lower()
+    if output_format not in {"table", "json", "csv"}:
+        raise typer.BadParameter("--format must be table, json, or csv.", param_name="format")
+
+    if output_format == "table":
+        if not forecast.get("forecasts"):
+            typer.echo("No forecast available (insufficient data).")
+            raise typer.Exit(code=1)
+        typer.echo(
+            f"Metric: {metric} | Model: {forecast['model']} | Trend: {forecast.get('trend')} "
+            f"| RMSE: {forecast.get('confidence')}"
+        )
+        typer.echo("Date        | Prediction")
+        typer.echo("-" * 30)
+        for date_str, value in forecast["forecasts"]:
+            typer.echo(f"{date_str} | {value:.2f}")
+        return
+
+    # JSON/CSV – build metadata
+    payload = {
+        "athlete_id": int(resolved_id),
+        "athlete": _clean_identifier(athlete) or _default_athlete(),
+        "metric": metric,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "app_version": _app_version(),
+        **forecast,
+    }
+
+    if output_format == "json":
+        text = json.dumps(payload, indent=2) + "\n"
+        if to:
+            to_path = to.expanduser()
+            to_path.parent.mkdir(parents=True, exist_ok=True)
+            to_path.write_text(text, encoding="utf-8")
+            typer.echo(f"Saved forecast JSON to {to_path}")
+        else:
+            typer.echo(text)
+        return
+
+    # CSV output
+    rows = forecast.get("forecasts") or []
+    if to is None:
+        base = Path("export")
+        base.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        to = base / f"forecast_{metric}_{stamp}.csv"
+    to_path = to.expanduser()
+    to_path.parent.mkdir(parents=True, exist_ok=True)
+    with to_path.open("w", encoding="utf-8") as handle:
+        handle.write("date,prediction\n")
+        for d, v in rows:
+            handle.write(f"{d},{v}\n")
+    typer.echo(f"Saved forecast CSV to {to_path}")
 
 
 @app.command("strength-log")
@@ -937,6 +1008,16 @@ def _get_or_create_athlete(name: str) -> int:
         conn.commit()
         new_id = conn.execute("SELECT id FROM Athletes WHERE name = ?", (clean,)).fetchone()[0]
         return int(new_id)
+
+def _lookup_athlete_id(name: str) -> Optional[int]:
+    clean = (name or "").strip()
+    if not clean:
+        return None
+    with open_database(readonly=True) as conn:
+        row = conn.execute("SELECT id FROM Athletes WHERE name = ? LIMIT 1", (clean,)).fetchone()
+        if row:
+            return int(row[0])
+    return None
 
 def _validate_event_choice(value: str | None) -> str:
     candidate = (value or "").strip().lower()
