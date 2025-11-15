@@ -87,13 +87,13 @@ Forecast examples:
 
 ```bash
 # Resolve athlete from name or env; show table
-javelin forecast --athlete esha --metric throw_distance --days-ahead 10
+javelin forecast --athlete uday --metric throw_distance --days-ahead 10
 
 # JSON to stdout (machine-readable)
-javelin forecast --athlete esha --metric throw_distance --format json
+javelin forecast --athlete uday --metric throw_distance --format json
 
 # CSV to file
-javelin forecast --athlete esha --metric throw_distance --format csv --to export/esha_throw_fc.csv
+javelin forecast --athlete uday --metric throw_distance --format csv --to export/esha_throw_fc.csv
 ```
 
 ## Multi-athlete workflows
