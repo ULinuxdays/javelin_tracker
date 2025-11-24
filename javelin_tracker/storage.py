@@ -942,9 +942,36 @@ def predict_trends(
 
     with open_database(readonly=True) as conn:
         series = _fetch_metric_series(conn, athlete_id, metric)
+        if len(series) < 3:
+            synthetic = _synthetic_series_from_profile(conn, athlete_id, metric)
+            if synthetic:
+                series = synthetic
 
     if len(series) < 3:
         LOGGER.warning("Not enough data to model %s for athlete %s", metric, athlete_id)
+        # If we have at least one point, return a flat projection instead of empty.
+        if len(series) == 1:
+            value = float(series[0][1])
+            last_date = series[0][0]
+            forecasts = [
+                ((last_date + timedelta(days=step)).date().isoformat(), value)
+                for step in range(1, days_ahead + 1)
+            ]
+            return {"forecasts": forecasts, "model": "flat", "confidence": 0.0, "trend": "flat"}
+        if len(series) == 2:
+            # Simple linear extrapolation for two points
+            (t0, v0), (t1, v1) = series
+            delta_days = max(1, (t1 - t0).days)
+            slope = (float(v1) - float(v0)) / delta_days
+            last_date = t1
+            forecasts = []
+            for step in range(1, days_ahead + 1):
+                val = float(v1) + slope * step
+                if val < 0:
+                    val = 0.0
+                forecasts.append(((last_date + timedelta(days=step)).date().isoformat(), val))
+            trend = "up" if slope > 0 else "down" if slope < 0 else "flat"
+            return {"forecasts": forecasts, "model": "linear_seed", "confidence": None, "trend": trend}
         return {"forecasts": [], "model": "insufficient", "confidence": None, "trend": "flat"}
 
     series.sort(key=lambda item: item[0])
@@ -1130,6 +1157,113 @@ def _fetch_metric_series(
         return _to_time_series(aggregate)
 
     return []
+
+
+def _synthetic_series_from_profile(
+    conn: sqlite3.Connection,
+    athlete_id: int,
+    metric: str,
+) -> list[tuple[datetime, float]]:
+    """
+    Build a minimal series from stored athlete profile data when logs are absent.
+    This keeps forecasts usable after only entering profile benchmarks.
+    """
+    row = conn.execute(
+        "SELECT strength_benchmarks, throw_distances, updated_at, created_at FROM Athletes WHERE id = ?",
+        (athlete_id,),
+    ).fetchone()
+    if not row:
+        return []
+    strength_json, throws_json, updated_at, created_at = row
+    def _coerce_mapping(text: Any) -> dict[str, Any]:
+        if not text:
+            return {}
+        if isinstance(text, dict):
+            return text
+        if isinstance(text, str):
+            # Try strict JSON first
+            try:
+                return json.loads(text)
+            except Exception:
+                pass
+            # Fallback for loose "bench press:100,back squat:110" style strings
+            parts = [chunk.strip() for chunk in text.strip("{}").split(",") if chunk.strip()]
+            mapping: dict[str, Any] = {}
+            for part in parts:
+                if ":" in part:
+                    k, v = part.split(":", 1)
+                    try:
+                        mapping[k.strip().strip('"')] = float(v.strip().strip('"'))
+                    except Exception:
+                        continue
+            return mapping
+        return {}
+
+    strength = _coerce_mapping(strength_json)
+    throws = _coerce_mapping(throws_json)
+
+    base_date = None
+    for ts in (updated_at, created_at):
+        try:
+            base_date = datetime.fromisoformat(str(ts))
+            break
+        except Exception:
+            continue
+    base_date = base_date or _now_utc()
+
+    def _spread(values: list[float]) -> list[tuple[datetime, float]]:
+        return [
+            (base_date - timedelta(days=2 * idx), float(value))
+            for idx, value in enumerate(values)
+            if value is not None
+        ]
+
+    if metric == "throw_distance" and throws:
+        primary = max(
+            throws.items(),
+            key=lambda item: len(item[1]) if isinstance(item[1], list) else 0,
+        )[0]
+        values_raw = throws.get(primary) or []
+        numeric: list[float] = []
+        for v in values_raw:
+            try:
+                numeric.append(float(v))
+            except Exception:
+                continue
+        if numeric:
+            return _spread(numeric[:5])
+
+    if metric == "bench_1rm":
+        bench = strength.get("bench press")
+        if bench is not None:
+            return _spread([float(bench)] * 3)
+
+    if metric == "squat_1rm":
+        squat = strength.get("back squat")
+        if squat is not None:
+            return _spread([float(squat)] * 3)
+
+    if metric == "session_load":
+        primary = None
+        if throws:
+            primary = max(
+                throws.items(),
+                key=lambda item: len(item[1]) if isinstance(item[1], list) else 0,
+            )[0]
+        distances = throws.get(primary) if primary else None
+        numeric: list[float] = []
+        if isinstance(distances, list):
+            for v in distances:
+                try:
+                    numeric.append(float(v))
+                except Exception:
+                    continue
+        if numeric:
+            loads = [max(10.0, d * 1.5) for d in numeric[:3]]
+            return _spread(loads)
+
+    return []
+
 def _fetch_athlete_profile(conn: sqlite3.Connection, athlete_id: int) -> dict[str, Any]:
     row = conn.execute(
         """

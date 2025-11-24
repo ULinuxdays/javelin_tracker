@@ -1,0 +1,53 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Reports</h3>
+      <p class="muted">Snapshot of current window for export or sharing.</p>
+    </div>
+    <button class="ghost" id="refreshCliSummary">Refresh</button>
+  </header>
+  <pre id="cliSummaryText" class="code-block">Loading CLI summary…</pre>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Weekly PDF export</h3>
+      <p class="muted">Generate a PDF recap for a specific athlete and week.</p>
+    </div>
+  </header>
+  <form id="weeklyReportForm" class="stack-form">
+    <div class="form-grid">
+      <label>
+        <span>Athlete</span>
+        <select name="athlete" data-athlete-select>
+          <option value="">Select athlete</option>
+        </select>
+      </label>
+      <label>
+        <span>Events (optional, comma separated)</span>
+        <input type="text" name="events" placeholder="javelin, discus" />
+      </label>
+      <label>
+        <span>Week ending (optional)</span>
+        <input type="date" name="week_ending" />
+      </label>
+      <label>
+        <span>Team (optional)</span>
+        <input type="text" name="team" placeholder="Team name" />
+      </label>
+      <label>
+        <span>School / Program (optional)</span>
+        <input type="text" name="school" placeholder="Program name" />
+      </label>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="primary">Generate PDF</button>
+    </div>
+  </form>
+  <div class="form-status" id="weeklyReportStatus">Ready</div>
+</section>
+{% endblock %}

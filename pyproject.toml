@@ -31,6 +31,7 @@ dependencies = [
   "numpy>=1.23",
   "reportlab>=4.0",
   "pyarrow>=10.0",
+  "Flask>=3.0",
 ]
 
 [project.urls]
@@ -51,7 +52,7 @@ javelin = "javelin_tracker.cli:app"
 throws = "javelin_tracker.cli:app"
 
 [tool.setuptools]
-packages = ["javelin_tracker"]
+packages = ["javelin_tracker", "javelin_tracker.webapp"]
 
 [tool.ruff]
 line-length = 88

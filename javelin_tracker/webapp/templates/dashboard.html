@@ -1,0 +1,119 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="hero">
+  <div class="metric-card">
+    <p class="muted">Personal best</p>
+    <h2 id="heroPersonalBest">--</h2>
+    <p class="muted small" id="heroPersonalBestDate">--</p>
+  </div>
+  <div class="metric-card">
+    <p class="muted">Sessions</p>
+    <h2 id="heroSessions">--</h2>
+    <p class="muted small">Total logged</p>
+  </div>
+  <div class="metric-card">
+    <p class="muted">Load</p>
+    <h2 id="heroLoad">--</h2>
+    <p class="muted small">Acute workload</p>
+  </div>
+  <div class="metric-card">
+    <p class="muted">Athletes</p>
+    <h2 id="heroAthletes">--</h2>
+    <p class="muted small">Active profiles</p>
+  </div>
+</section>
+
+<section class="panel quick-row">
+  <div>
+    <h3>Quick actions</h3>
+    <p class="muted">Jump into the key workflows.</p>
+  </div>
+  <div class="chip-row">
+    <a class="ghost" href="{{ url_for('sessions_page') }}">Log session</a>
+    <a class="ghost" href="{{ url_for('athletes_page') }}">Update athlete</a>
+    <a class="ghost" href="{{ url_for('training_page') }}">Run ThrowAI</a>
+    <a class="ghost" href="{{ url_for('weight_room_page') }}">Weight room</a>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Performance trend</h3>
+      <p class="muted">Rolling bests and throw volume by week.</p>
+    </div>
+    <div class="chip-row">
+      <button class="ghost" data-summary-toggle="week">Weekly</button>
+      <button class="ghost" data-summary-toggle="month">Monthly</button>
+    </div>
+  </header>
+  <div class="chart-area">
+    <div class="chart-placeholder" id="chartPlaceholder">Log sessions to see trends.</div>
+    <canvas id="performanceChart" height="260"></canvas>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Summary</h3>
+      <p class="muted">Top-line load, PBs, and readiness.</p>
+    </div>
+  </header>
+  <div class="summary-grid">
+    <div>
+      <h4 class="muted">Overview</h4>
+      <div id="intelReadiness" class="muted"></div>
+    </div>
+    <div>
+      <h4 class="muted">Personal bests</h4>
+      <ul id="pbList" class="intel-list"></ul>
+      <p class="muted small" id="intelPbSummary"></p>
+    </div>
+    <div>
+      <h4 class="muted">Risk windows</h4>
+      <ul id="riskList" class="intel-list"></ul>
+      <p class="muted small" id="intelRiskSummary"></p>
+    </div>
+    <div class="full">
+      <h4 class="muted">Readiness board</h4>
+      <div id="readinessBoard" class="intel-card muted">Need more data to gauge readiness.</div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Session breakdown</h3>
+      <p class="muted">Per-athlete metrics and ACWR estimates.</p>
+    </div>
+    <div class="chip-row">
+      <button class="ghost" data-tab="all">Rollup</button>
+      <button class="ghost" data-tab="events">Per event</button>
+    </div>
+  </header>
+  <div class="table-wrapper">
+    <table class="workout-table">
+      <thead>
+        <tr>
+          <th>Scope</th>
+          <th>Athlete</th>
+          <th>Event</th>
+          <th>Group</th>
+          <th>Sessions</th>
+          <th>Best</th>
+          <th>Load</th>
+          <th>Throws</th>
+          <th>ACWR</th>
+          <th>Risk</th>
+        </tr>
+      </thead>
+      <tbody id="summaryTable">
+        <tr><td colspan="10">No sessions logged yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

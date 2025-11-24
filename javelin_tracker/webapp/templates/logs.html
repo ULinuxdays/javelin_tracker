@@ -1,0 +1,48 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<div class="logs-dual">
+  <section class="panel">
+    <header class="panel-header">
+      <div>
+        <h3>Sessions</h3>
+        <p class="muted">Recent throws with quick actions.</p>
+      </div>
+      <div class="chip-row">
+        <label class="muted small">Filter event
+          <select id="timelineFilter"></select>
+        </label>
+        <input id="sessionsSearch" type="search" placeholder="Search athlete, event, tags" />
+      </div>
+    </header>
+    <div id="sessionTimeline" class="timeline-grid"></div>
+  </section>
+
+  <section class="panel">
+    <header class="panel-header">
+      <div>
+        <h3>Strength log</h3>
+        <p class="muted">Grouped by day; expand to view sets.</p>
+      </div>
+      <label class="muted small">Athlete
+        <select id="strengthFilter"></select>
+      </label>
+    </header>
+    <div class="table-wrapper">
+      <table class="workout-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Athlete</th>
+            <th>Sets</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="strengthTable">
+          <tr><td colspan="4">No workout sets recorded yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}

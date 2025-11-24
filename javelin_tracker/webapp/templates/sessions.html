@@ -1,0 +1,99 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Log a training session</h3>
+      <p class="muted">Matches the CLI flags so workflows stay consistent.</p>
+    </div>
+  </header>
+  <div class="session-grid">
+    <div class="session-form-col">
+      <form id="sessionForm" class="stack-form" data-logged-athlete-form>
+        <div class="form-grid">
+          <label>
+            <span>Athlete</span>
+            <div class="athlete-select-wrapper" data-athlete-select-wrapper>
+              <select name="athlete" data-logged-athlete-select>
+                <option value="">Select athlete</option>
+              </select>
+              <input class="athlete-custom-input" type="text" placeholder="Add new athlete" data-logged-athlete-input />
+            </div>
+          </label>
+          <label>
+            <span>Event</span>
+            <input type="text" name="event" placeholder="javelin, discus, ..." required />
+          </label>
+          <label>
+            <span>Date</span>
+            <input type="date" name="date" />
+          </label>
+          <label>
+            <span>Best distance (m)</span>
+            <input type="number" step="0.01" name="best" placeholder="62.40" />
+          </label>
+          <label>
+            <span>Throws (comma separated)</span>
+            <input type="text" name="throws" placeholder="61.2, 60.8, 62.4" />
+          </label>
+          <label>
+            <span>RPE (1-10)</span>
+            <input type="number" name="rpe" min="1" max="10" />
+          </label>
+          <label>
+            <span>Duration (minutes)</span>
+            <input type="number" name="duration_minutes" step="1" />
+          </label>
+          <label>
+            <span>Team</span>
+            <input type="text" name="team" placeholder="Squad label" />
+          </label>
+          <label>
+            <span>Implement weight (kg)</span>
+            <input type="number" step="0.01" name="implement_weight_kg" />
+          </label>
+          <label>
+            <span>Technique</span>
+            <input type="text" name="technique" placeholder="Full, 3-step" />
+          </label>
+          <label>
+            <span>Fouls</span>
+            <input type="number" name="fouls" min="0" />
+          </label>
+          <label>
+            <span>Tags</span>
+            <input type="text" name="tags" placeholder="run-up, strength" />
+          </label>
+          <label class="full">
+            <span>Notes</span>
+            <textarea name="notes" rows="3" placeholder="Conditions, feelings, etc."></textarea>
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="primary">Save session</button>
+          <button type="reset" class="ghost">Reset</button>
+        </div>
+      </form>
+      <div class="form-status" id="formStatus">Ready</div>
+    </div>
+    <aside class="session-sidebar">
+      <div class="side-card">
+        <h4>Checklist</h4>
+        <ul class="muted">
+          <li>Confirm athlete & event</li>
+          <li>Add throws OR best distance</li>
+          <li>Include RPE and duration for load</li>
+          <li>Tag technique & conditions</li>
+        </ul>
+      </div>
+      <div class="side-card">
+        <h4>Pro tips</h4>
+        <p class="muted small">RPE x duration drives load; consistent tags improve analytics and forecasts.</p>
+        <p class="muted small">Use notes to capture runway, wind, or cues that mattered.</p>
+      </div>
+    </aside>
+  </div>
+</section>
+
+{% endblock %}

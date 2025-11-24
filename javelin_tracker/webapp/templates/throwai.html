@@ -1,0 +1,62 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>ThrowAI intelligence</h3>
+      <p class="muted">Run multi-metric forecasts and keep athletes aligned.</p>
+    </div>
+  </header>
+  <form id="forecastForm" class="stack-form">
+    <div class="form-grid">
+      <label>
+        <span>Athlete</span>
+        <select name="athlete" data-athlete-select>
+          <option value="">Select athlete</option>
+        </select>
+      </label>
+      <label>
+        <span>Days ahead</span>
+        <input type="number" name="days" value="14" min="3" max="60" />
+      </label>
+    </div>
+    <button type="submit" class="primary">Run forecast</button>
+  </form>
+  <div id="forecastOutput" class="muted" aria-live="polite">Select an athlete to see forecasts.</div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Program intelligence</h3>
+      <p class="muted">PB chasing, risk flags, and readiness board in one view.</p>
+    </div>
+  </header>
+  <div class="summary-grid">
+    <div>
+      <h4 class="muted">Signals</h4>
+      <ul id="trainingIntelList" class="intel-list"></ul>
+      <p class="muted small" id="intelRiskSummary"></p>
+    </div>
+    <div>
+      <h4 class="muted">Readiness board</h4>
+      <div id="readinessBoard" class="intel-card muted">Need more data to gauge readiness.</div>
+    </div>
+    <div>
+      <h4 class="muted">PB focus</h4>
+      <ul id="pbList" class="intel-list"></ul>
+      <p class="muted small" id="intelPbSummary"></p>
+    </div>
+    <div>
+      <h4 class="muted">Risk windows</h4>
+      <ul id="trainingRiskList" class="intel-list"></ul>
+      <p class="muted small">High-risk dates to manage ACWR.</p>
+    </div>
+    <div class="full">
+      <h4 class="muted">Readiness summary</h4>
+      <div id="intelReadiness" class="muted">Need more data to gauge readiness.</div>
+    </div>
+  </div>
+</section>
+{% endblock %}
