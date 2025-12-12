@@ -1,6 +1,6 @@
 # Throws Tracker By Uday Thakran
 
-Command-line toolkit for capturing throwing sessions, analysing workload, and generating coaching/research reports across javelin, discus, shot, hammer (plus custom events).
+Coach Command Center web app + CLI for capturing throwing sessions, analysing workload/readiness, forecasting trends, and generating coaching reports across javelin, discus, shot, hammer (plus custom events).
 
 [![CI](https://github.com/uday/Javelin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/uday/Javelin/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/PyPI-not--published-lightgrey?logo=pypi)](#installation)
@@ -8,16 +8,16 @@ Command-line toolkit for capturing throwing sessions, analysing workload, and ge
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-yellow.svg)](CHANGELOG.md)
 
-Note: The CLI binary is available as both `javelin` and `throws`. The package was formerly published as `javelin-tracker` and is now `throws-tracker`.
+Note: The CLI binary is available as both `javelin` and `throws`. The web app lives under `javelin_tracker/webapp`. The package was formerly published as `javelin-tracker` and is now `throws-tracker`.
 
 ## Highlights
 
 - Multi-event tracking with configurable allowlist (defaults: javelin, discus, shot, hammer)
 - Session-RPE workload plus ACWR (rolling and EWMA) and PB flags
-- Multi-athlete workflows with role-based scoping (coach vs athlete)
-- Exports with provenance (CSV, Parquet, JSON + metadata)
-- Plots and weekly PDF reports for athletes/events
-- Import/migration for legacy logs; deterministic demo datasets
+- Multi-athlete workflows with teams and role-based scoping (head coach, assistants)
+- Web app: dashboard + analytics with load/readiness tooltips, fast session logging with templates, team-aware logs, weight room planner/logs, ThrowAI forecasts with explanations, reports UI, privacy/help pages
+- Exports with provenance (CSV, Parquet, JSON + metadata); weekly PDF reports
+- Import/migration for legacy logs; deterministic demo datasets; CSV roster/session import
 - Optional SQLite-backed athlete profile, strength logs, and metric forecasting
 
 ## Installation
@@ -66,6 +66,69 @@ Bootstrap a sandbox dataset with:
 ```bash
 python -m javelin_tracker seed --source demo/demo_sessions.json --force
 ```
+
+## Web app deployment (coaches/programs)
+
+### Configuration
+- `SECRET_KEY` (or `THROWS_TRACKER_SECRET`): required in production for session security.
+- `DATA_DIR` / `THROWS_TRACKER_DATA_DIR`: where the SQLite database and session JSON live (mount a persistent volume in Docker).
+- `SESSION_COOKIE_SECURE=1` and `FORCE_HTTPS=1`: enable when serving behind HTTPS.
+- `FLASK_ENV=production`: disable debug mode.
+
+### Run with Docker
+```
+docker build -t javelin-tracker .
+docker run -p 8000:8000 -e SECRET_KEY=change-me -e THROWS_TRACKER_DATA_DIR=/data -v $(pwd)/data:/data javelin-tracker
+```
+The container starts gunicorn on port 8000. Mount `/data` for persistence and back up that directory regularly.
+
+### Local run (gunicorn)
+```
+export SECRET_KEY=change-me
+export THROWS_TRACKER_DATA_DIR=./data
+gunicorn -b 0.0.0.0:8000 javelin_tracker.webapp:app
+```
+
+### Migrations and schema
+Data is stored in SQLite by default. Schema changes are applied automatically at startup; keep backups of your data directory before upgrading. For production, use a durable volume and snapshot it before deploys. If you point `DB_FILE`/`DATA_DIR` at a different path, the app will initialise the schema there.
+
+### Backups
+- Take regular copies of the data directory (or the configured DB file) before upgrades.
+- For containerised deployments, snapshot the `/data` volume or dump the database on a schedule to object storage.
+- To restore, stop the app, replace the DB file/volume with the backup, then restart.
+
+### Security notes
+- Passwords are hashed; set a strong `SECRET_KEY`.
+- Login attempts are rate-limited.
+- Use HTTPS in production and set `SESSION_COOKIE_SECURE=1`.
+- Restrict imports/exports and team/role management to head coach roles.
+
+## Web app features (Coach Command Center)
+
+- **Dashboard & Analytics**
+  - Hero metrics (PBs, sessions, load in AU, ACWR risk flags) with tooltips explaining how load/readiness is calculated.
+  - Load/readiness help page (`/help/metrics`) linked throughout.
+  - Demo data preview is clearly labeled and removed once real sessions/athletes are added.
+- **Sessions & Logs**
+  - Fast logging with templates (competition/technical/heavy), Save & Stay / Save & New, sticky recent fields.
+  - Team-aware logs and filters; responsive mobile tables.
+  - Inline validation (required fields, RPE ranges) and toasts for success/error.
+- **Teams & Roles**
+  - Teams table (multi-team programs) with team filters across dashboard/logs/analytics/reports.
+  - Roles: head coach (full access, imports/exports/teams), assistants (limited), trainer/S&C planned.
+- **Athletes**
+  - Roster with team assignment, height/weight/BMI, strength benchmarks; inline errors and empty-state guidance.
+- **Imports/Exports**
+  - CSV roster import; session import; CSV export of sessions. Restricted to head coach.
+- **Weight Room**
+  - Daily plan, quick log, manual lift entry, and strength log table; demo notice clears with real data.
+- **ThrowAI (Forecasts)**
+  - Time-series forecasts per athlete/metric (throw distance, session load, etc.) with model selection (Holt/WLS/poly) and confidence (RMSE).
+  - Natural-language explanations of trends/magnitude; “How we calculate forecasts” link.
+- **Reports**
+  - Weekly PDF generation with team filters and window context; report status card; CLI summary refresh.
+- **Privacy & Health**
+  - Privacy page describing what’s stored and who can see it; `/health` endpoint for uptime checks.
 
 ## CLI overview
 

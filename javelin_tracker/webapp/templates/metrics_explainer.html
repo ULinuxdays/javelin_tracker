@@ -1,0 +1,82 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>How we calculate load & readiness</h3>
+      <p class="muted">Plain-language formulas so you can trust the dashboard, analytics, and reports.</p>
+    </div>
+  </header>
+  <div class="summary-grid">
+    <article class="subpanel">
+      <p class="panel-label">Why it matters</p>
+      <p>We track training stress so you can spot spikes, balance intensity, and reduce injury risk while chasing PBs.</p>
+    </article>
+    <article class="subpanel">
+      <p class="panel-label">Units & windows</p>
+      <ul class="checklist">
+        <li class="done"><span class="check-icon"></span><div><strong>Distance</strong> — meters (m)</div></li>
+        <li class="done"><span class="check-icon"></span><div><strong>Load</strong> — arbitrary units (AU) = RPE × duration (minutes)</div></li>
+        <li class="done"><span class="check-icon"></span><div><strong>RPE</strong> — 1–10 perceived effort</div></li>
+        <li class="done"><span class="check-icon"></span><div><strong>Windows</strong> — acute = last 7 days (average), chronic = last 28 days (average)</div></li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Session load</h3>
+      <p class="muted">What a single session contributes.</p>
+    </div>
+  </header>
+  <p><strong>Formula:</strong> Session load = RPE × duration (minutes).</p>
+  <p class="muted small">Example: 45 min × RPE 7 = 315 AU (arbitrary units). Throws/implements still matter, but RPE × time captures internal load consistently.</p>
+  <p class="muted small">We also store event, notes, tags, and implement weight to keep context.</p>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Weekly / block load</h3>
+      <p class="muted">Averages and variability that feed ACWR and strain.</p>
+    </div>
+  </header>
+  <ul class="quickstart-list">
+    <li><strong>Acute load (7d mean):</strong> Average daily load across the last 7 days.</li>
+    <li><strong>Chronic load (28d mean):</strong> Average daily load across the last 28 days.</li>
+    <li><strong>Monotony:</strong> 7-day mean ÷ 7-day standard deviation (flagging repetitive, non-varied training).</li>
+    <li><strong>Strain:</strong> 7-day load sum × monotony — highlights heavy weeks with little variation.</li>
+    <li><strong>Blocks:</strong> If you define blocks, we still surface the most recent acute/chronic/monotony signals.</li>
+  </ul>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>ACWR (acute:chronic workload ratio)</h3>
+      <p class="muted">Flags sudden spikes by comparing short-term to longer-term load.</p>
+    </div>
+  </header>
+  <p><strong>Formula:</strong> ACWR = Acute 7-day <em>average</em> ÷ Chronic 28-day <em>average</em>.</p>
+  <p class="muted small">Typical guidance: keep ACWR near 0.8–1.3 to avoid abrupt spikes. We also bump risk if monotony is high or weekly strain is excessive.</p>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Readiness signals</h3>
+      <p class="muted">How we surface readiness and risk cues.</p>
+    </div>
+  </header>
+  <ul class="quickstart-list">
+    <li>We look at load trends, ACWR, monotony/strain, and RPE averages in your selected window.</li>
+    <li>“Risk” tags appear when acute load exceeds the sweet spot <em>or</em> when monotony/strain stay high without variation.</li>
+    <li>Readiness multipliers are driven by trend slopes, percent changes, and effect sizes (recent vs baseline).</li>
+    <li>Use tags/notes to capture context (surface, wind, technical focus) that informs decisions.</li>
+  </ul>
+  <div class="panel-note muted small">These metrics are guidance to support coaching decisions and should complement your observation and medical input.</div>
+</section>
+{% endblock %}

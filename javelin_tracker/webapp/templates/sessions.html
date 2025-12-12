@@ -1,0 +1,194 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Log a training session</h3>
+      <p class="muted">Guided capture for throws, load, and context that keeps analytics fresh.</p>
+    </div>
+  </header>
+  {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+  <div class="panel-note muted small">Demo data is currently visible for preview. It will be cleared as soon as you log your own session or add an athlete.</div>
+  {% endif %}
+  <div class="week-planner">
+    <div>
+      <p class="panel-label">Week plan</p>
+      <p class="muted small">Tap a day to pre-fill the date for quick logging.</p>
+    </div>
+    <div class="week-strip" id="weekPlanner">
+      <button type="button" class="week-day" data-weekday="1">Mon<span class="week-date"></span></button>
+      <button type="button" class="week-day" data-weekday="2">Tue<span class="week-date"></span></button>
+      <button type="button" class="week-day" data-weekday="3">Wed<span class="week-date"></span></button>
+      <button type="button" class="week-day" data-weekday="4">Thu<span class="week-date"></span></button>
+      <button type="button" class="week-day" data-weekday="5">Fri<span class="week-date"></span></button>
+      <button type="button" class="week-day" data-weekday="6">Sat<span class="week-date"></span></button>
+      <button type="button" class="week-day" data-weekday="0">Sun<span class="week-date"></span></button>
+    </div>
+  </div>
+  <div class="session-empty" id="sessionsEmptyState">
+    <div>
+      <p class="section-label">No sessions this week.</p>
+      <p class="muted small">Add Monday’s session to get load and readiness estimates.</p>
+    </div>
+    <button type="button" class="btn btn-primary" id="prefillMonday">Add Monday’s session</button>
+  </div>
+  <div class="template-pills" aria-label="Session templates">
+    <button type="button" class="chip" data-template="comp">Competition day</button>
+    <button type="button" class="chip" data-template="tech">Technical session</button>
+    <button type="button" class="chip" data-template="heavy">Heavy throws</button>
+    <button type="button" class="chip" data-template="last">Use last session</button>
+    <button type="button" class="chip" data-template="clear">Clear template</button>
+  </div>
+  <div class="quick-actions-row">
+    <button type="button" class="btn btn-primary" id="quickAddSession">Add session</button>
+    <button type="button" class="btn btn-soft" id="duplicateSession">Duplicate last session</button>
+    <button type="button" class="btn btn-ghost" id="openTemplateSelect">Use template</button>
+  </div>
+  <div class="split-grid sessions-layout">
+    <div class="session-form-col">
+      <form id="sessionForm" class="stack-form" data-logged-athlete-form>
+        <div class="form-section">
+          <div class="section-heading">
+            <p class="section-label">Session details</p>
+            <p class="muted small">Who, what, and when.</p>
+          </div>
+          <div class="form-grid">
+            <label>
+            <span>Athlete</span>
+            <div class="athlete-select-wrapper" data-athlete-select-wrapper>
+              <select name="athlete" data-logged-athlete-select autofocus>
+                <option value="">Select athlete</option>
+              </select>
+              <input class="athlete-custom-input" type="text" placeholder="Add new athlete" data-logged-athlete-input />
+            </div>
+            <p class="field-error" data-error-for="athlete"></p>
+          </label>
+          <label>
+            <span>Event</span>
+            <input type="text" name="event" placeholder="javelin, discus, ..." required />
+            <p class="field-error" data-error-for="event"></p>
+          </label>
+          <label>
+            <span>Date</span>
+            <div class="input-with-note">
+              <input type="date" name="date" autocomplete="off" />
+              <small class="muted small">Defaults to today</small>
+            </div>
+            <p class="field-error" data-error-for="date"></p>
+          </label>
+          <label>
+            <span>Team</span>
+            <select name="team" data-team-select>
+              <option value="Unassigned">Unassigned</option>
+            </select>
+          </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="section-heading">
+            <p class="section-label">Load & structure</p>
+            <p class="muted small">Capture bests, volume, and session feel.</p>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>Best distance (m)</span>
+              <input type="number" step="0.01" name="best" placeholder="62.40" />
+            </label>
+            <label>
+              <span>Throws (comma separated)</span>
+              <input type="text" name="throws" placeholder="61.2, 60.8, 62.4" />
+            </label>
+          <label>
+            <span>RPE (1-10)</span>
+            <input type="number" name="rpe" min="1" max="10" inputmode="numeric" />
+            <p class="field-error" data-error-for="rpe"></p>
+          </label>
+          <label>
+            <span>Duration (minutes)</span>
+            <input type="number" name="duration_minutes" step="1" inputmode="numeric" />
+          </label>
+            <label>
+              <span>Implement weight (kg)</span>
+              <input type="number" step="0.01" name="implement_weight_kg" />
+            </label>
+            <label>
+              <span>Technique</span>
+              <input type="text" name="technique" placeholder="Full, 3-step" />
+            </label>
+            <label>
+              <span>Fouls</span>
+              <input type="number" name="fouls" min="0" />
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="section-heading">
+            <p class="section-label">Notes & tags</p>
+            <p class="muted small">Add the little details that inform ThrowAI.</p>
+          </div>
+          <div class="form-grid">
+            <label>
+              <span>Tags</span>
+              <input type="text" name="tags" placeholder="run-up, strength" />
+            </label>
+            <label class="full">
+              <span>Notes</span>
+              <textarea name="notes" rows="3" placeholder="Conditions, feelings, cues to remember."></textarea>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <div class="action-buttons">
+            <button type="submit" class="btn btn-primary" data-mode="stay">Save session</button>
+            <button type="submit" class="btn btn-soft" data-mode="new">Save & new</button>
+          </div>
+          <label class="input-label template-select">
+            Use template
+            <select id="sessionTemplate">
+              <option value="">Select</option>
+              <option value="tech">Tech (low load)</option>
+              <option value="heavy">Heavy throws</option>
+              <option value="comp">Competition</option>
+            </select>
+          </label>
+          <button type="reset" class="btn btn-ghost">Reset</button>
+        </div>
+      </form>
+      <div class="form-status" id="formStatus">Ready</div>
+    </div>
+
+    <aside class="session-sidebar">
+      <div class="side-card">
+        <div class="section-heading">
+          <p class="section-label">Recent sessions</p>
+          <p class="muted small">Latest throws for the selected athlete.</p>
+        </div>
+        <div id="sessionTimeline" class="timeline-grid compact"></div>
+      </div>
+      <div class="side-card">
+        <div class="section-heading">
+          <p class="section-label">Volume watch</p>
+          <p class="muted small">Keep RPE and duration tight to improve load quality.</p>
+        </div>
+        <ul class="muted small checklist">
+          <li>Confirm athlete + event</li>
+          <li>Log throws or best distance</li>
+          <li>Include RPE and duration</li>
+          <li>Tag surface, wind, or cues</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+  <div class="sticky-actions">
+    <div class="action-buttons">
+      <button type="submit" form="sessionForm" class="btn btn-primary" data-mode="new">Save & new</button>
+      <button type="submit" form="sessionForm" class="btn btn-soft" data-mode="stay">Save & stay</button>
+    </div>
+  </div>
+</section>
+
+{% endblock %}

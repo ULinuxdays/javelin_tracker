@@ -1,0 +1,75 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Quick start for throws squads</h3>
+      <p class="muted">Three moves to get value fast: add athletes, log sessions, review analytics & reports.</p>
+    </div>
+    <a class="btn btn-soft" href="{{ url_for('dashboard') }}">Back to dashboard</a>
+  </header>
+  <div class="summary-grid">
+    <article class="subpanel">
+      <p class="panel-label">Step 1</p>
+      <h4>Create teams & athletes</h4>
+      <p class="muted">Set up teams (e.g., Men’s Javelin, Women’s Throws) and add athletes with height/weight.</p>
+      <a class="btn btn-soft" href="{{ url_for('athletes_page') }}">Go to roster</a>
+      <p class="muted small">Import rosters via CSV (head coach) if you already track in spreadsheets.</p>
+    </article>
+    <article class="subpanel">
+      <p class="panel-label">Step 2</p>
+      <h4>Log training sessions</h4>
+      <p class="muted">Record best throws, RPE, tags, and notes—ideally same day.</p>
+      <a class="btn btn-soft" href="{{ url_for('sessions_page') }}">Log a session</a>
+    </article>
+    <article class="subpanel">
+      <p class="panel-label">Step 3</p>
+      <h4>Review & report</h4>
+      <p class="muted">See load/ACWR on Analytics, and export a weekly PDF for staff.</p>
+      <a class="btn btn-primary" href="{{ url_for('reports_page') }}">Generate report</a>
+    </article>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Where to do what</h3>
+      <p class="muted">Pin these pages: Sessions for logging, Dashboard/Analytics for trends, Reports for sharing.</p>
+    </div>
+  </header>
+  <div class="dual-grid">
+    <div class="subpanel">
+      <p class="panel-label">Log training</p>
+      <ul class="checklist">
+        <li class="done"><span class="check-icon"></span><div><strong>Sessions</strong><p class="muted small">Add throws, RPE, tags, and notes daily.</p></div></li>
+        <li class="done"><span class="check-icon"></span><div><strong>Weight room</strong><p class="muted small">Log sets/reps and quick daily plans.</p></div></li>
+      </ul>
+    </div>
+    <div class="subpanel">
+      <p class="panel-label">Analyze & share</p>
+      <ul class="checklist">
+        <li class="done"><span class="check-icon"></span><div><strong>Dashboard</strong><p class="muted small">Hero metrics + readiness and risk alerts.</p></div></li>
+        <li class="done"><span class="check-icon"></span><div><strong>Analytics</strong><p class="muted small">Load vs performance, PBs, and tag focus.</p></div></li>
+        <li class="done"><span class="check-icon"></span><div><strong>Reports</strong><p class="muted small">Generate weekly PDFs for staff or compliance.</p></div></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Recommended first week workflow</h3>
+      <p class="muted">Keep it lightweight—just enough data to unlock readiness and load guidance.</p>
+    </div>
+  </header>
+  <ol class="quickstart-list">
+    <li>Day 1: Add your squad + log the day’s throws with RPE and notes.</li>
+    <li>Day 3: Log at least one more session; tag conditions (wind/runway) and emphasis (tech/heavy).</li>
+    <li>Day 5–7: Review Analytics “Load & readiness”; generate a weekly PDF and share with staff.</li>
+  </ol>
+  <div class="panel-note muted small">Tip: Consistent RPE + duration improves ACWR accuracy. Tag key cues to make reports more useful.</div>
+</section>
+{% endblock %}

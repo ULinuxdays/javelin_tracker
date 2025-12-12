@@ -1,0 +1,276 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<div class="mini-banner" id="loadRiskBanner">
+  <div class="mini-banner__text">
+    <strong>Load today:</strong> <span id="bannerLoadValue">--</span> ·
+    <strong>Risk:</strong> <span id="bannerRiskLevel">--</span>
+  </div>
+  <a class="muted small" href="{{ url_for('metrics_help') }}">How we calculate this</a>
+</div>
+
+<div class="filter-bar">
+  <label class="input-label">
+    Team
+    <select id="teamSelectDashboard" data-team-filter>
+      <option value="all">All teams</option>
+    </select>
+  </label>
+</div>
+
+{% if dashboard_onboarding and not dashboard_onboarding.onboarding_complete %}
+<section class="panel start-panel" id="startHerePanel">
+  <header class="panel-header">
+    <div>
+      <p class="panel-label">Start here</p>
+      <h3>Set up your coach workspace</h3>
+      <p class="muted small">Add athletes, log today’s session, and generate your first report.</p>
+    </div>
+    <a class="btn btn-soft" href="{{ url_for('quickstart_page') }}">Quick start guide</a>
+  </header>
+  <ul class="checklist start-grid">
+    <li class="{% if dashboard_onboarding.has_athletes %}done{% endif %}">
+      <span class="check-icon"></span>
+      <div>
+        <p class="section-label">Add your first athlete</p>
+        <p class="muted small">Create athletes with height/weight to keep load accurate.</p>
+        <a class="btn btn-ghost" href="{{ url_for('athletes_page') }}">Go to roster</a>
+      </div>
+    </li>
+    <li class="{% if dashboard_onboarding.has_sessions %}done{% endif %}">
+      <span class="check-icon"></span>
+      <div>
+        <p class="section-label">Log today’s session</p>
+        <p class="muted small">Capture best throws, RPE, tags, and notes for today.</p>
+        <a class="btn btn-soft" href="{{ url_for('sessions_page') }}?range=this_week">Log a session</a>
+      </div>
+    </li>
+    <li class="{% if dashboard_onboarding.has_reports %}done{% endif %}">
+      <span class="check-icon"></span>
+      <div>
+        <p class="section-label">Generate a weekly report</p>
+        <p class="muted small">Share a PDF with staff or compliance to finish setup.</p>
+        <a class="btn btn-primary" href="{{ url_for('reports_page') }}?range=this_week">Generate report</a>
+      </div>
+    </li>
+  </ul>
+</section>
+{% elif dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+<div class="panel-note muted small">
+  This account is showing demo data to preview the app. It will disappear as soon as you add a real athlete or log a real session, and only your own data will remain.
+</div>
+{% endif %}
+
+<section class="panel hero-panel">
+  {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+  <div class="panel-note muted small">Demo data shown so you can explore the dashboard. It will disappear when you add real athletes or sessions.</div>
+  {% endif %}
+  <div class="metrics-grid hero-metrics">
+    <article class="metric-card accent-green">
+      <p class="metric-label">Personal best (m)</p>
+      <div class="metric-value" id="heroPersonalBest">--</div>
+      <p class="metric-sub" id="heroPersonalBestDate">--</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Season best (m)</p>
+      <div class="metric-value" id="heroBest">--</div>
+      <p class="metric-sub" id="statPbDate">--</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Total sessions</p>
+      <div class="metric-value" id="heroSessions">--</div>
+      <p class="metric-sub">Logged in this window</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">
+        Acute load (AU)
+        <span class="info-tip" data-tooltip="Session load = total throws × RPE. Acute load sums the last {{ acute_days if acute_days else 7 }} days. AU means arbitrary units.">
+          ?
+        </span>
+      </p>
+      <div class="metric-value" id="heroLoad">--</div>
+      <p class="metric-sub">Rolling workload (AU)</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Active athletes</p>
+      <div class="metric-value" id="heroAthletes">--</div>
+      <p class="metric-sub">Roster in motion</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Risk alerts</p>
+      <div class="metric-value" id="heroAlerts">--</div>
+      <p class="metric-sub">ACWR watchlist</p>
+    </article>
+  </div>
+  <div class="stat-strip">
+    <div class="stat-pill">
+      <span class="muted">Window</span>
+      <span id="statDateRange">--</span>
+    </div>
+    <div class="stat-pill">
+      <span class="muted">Sessions</span>
+      <span id="statSessions">--</span>
+    </div>
+    <div class="stat-pill">
+      <span class="muted">Throws</span>
+      <span id="statThrows">--</span>
+    </div>
+    <div class="stat-pill">
+      <span class="muted">Load</span>
+      <span id="statLoad">--</span>
+    </div>
+    <div class="stat-pill">
+      <span class="muted">RPE</span>
+      <span id="statAvgRpe">--</span>
+    </div>
+    <div class="stat-pill">
+      <span class="muted">PB focus</span>
+      <span id="statPb">--</span>
+    </div>
+  </div>
+  <div class="cta-pills">
+    <a class="btn btn-soft" href="{{ url_for('sessions_page') }}?range=this_week">Plan week</a>
+    <a class="btn btn-ghost" href="{{ url_for('analytics_page') }}#load-readiness">Monitor load</a>
+    <a class="btn btn-primary" href="{{ url_for('reports_page') }}?range=this_week">Generate report</a>
+    <a class="muted small" href="{{ url_for('analytics_page') }}#load-readiness">View load detail</a>
+    <a class="muted small" href="{{ url_for('metrics_help') }}">How we calculate load</a>
+  </div>
+</section>
+
+<section class="panel quick-row">
+  <header class="panel-header">
+    <div>
+      <h3>Quick actions</h3>
+      <p class="muted">Jump straight into the core workflows.</p>
+    </div>
+    <div class="chip-row">
+      <a class="btn btn-soft" href="{{ url_for('sessions_page') }}">Log session</a>
+      <a class="btn btn-soft" href="{{ url_for('athletes_page') }}">Manage athletes</a>
+      <a class="btn btn-soft" href="{{ url_for('logs_page') }}">Review logs</a>
+      <a class="btn btn-soft" href="{{ url_for('analytics_page') }}">Open analytics</a>
+    </div>
+  </header>
+</section>
+
+<div class="split-grid">
+  <section class="panel">
+    <header class="panel-header">
+      <div>
+        <h3>Performance over time</h3>
+        <p class="muted">Best distances and throw volume across your training window.</p>
+      </div>
+      <div class="chip-row">
+        <button class="chip" data-summary-toggle="week">4 weeks</button>
+        <button class="chip" data-summary-toggle="month">Season</button>
+      </div>
+    </header>
+    <div class="chart-area">
+      <div class="chart-placeholder" id="chartPlaceholder">Log sessions to see trends.</div>
+      <canvas id="performanceChart" height="320"></canvas>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header class="panel-header">
+      <div>
+        <h3>Recent sessions</h3>
+        <p class="muted">Latest throws at a glance with quick clean-up.</p>
+      </div>
+      <input id="sessionsSearch" class="input" type="search" placeholder="Search athlete, event, tags" />
+    </header>
+    <div class="table-wrapper">
+      <table class="data-table" data-mobile-cards="true" data-deletable="true">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Athlete</th>
+            <th>Team</th>
+            <th>Event</th>
+            <th>Best distance (m)</th>
+            <th>Volume</th>
+            <th>RPE (1–10)</th>
+            <th>Tags</th>
+            <th>Load (AU)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="sessionsTable">
+          <tr><td colspan="10">
+            <div class="panel-note">
+              <p class="section-label">No sessions yet</p>
+              <p class="muted small">Log your first session to see it here.</p>
+              <a class="btn btn-soft" href="{{ url_for('sessions_page') }}">Log session</a>
+            </div>
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Readiness & PB focus <span class="info-tip" data-tooltip="Readiness looks at load trends, ACWR, and RPE averages in the current window.">?</span></h3>
+      <p class="muted">Coaching intelligence pulled from the latest block.</p>
+      <p class="muted small">Acute window: {{ acute_days if acute_days else 7 }} days · Chronic window: {{ chronic_days if chronic_days else 28 }} days.</p>
+    </div>
+  </header>
+  <div class="summary-grid">
+    <div>
+      <p class="panel-label">Readiness</p>
+      <div id="intelReadiness" class="muted"></div>
+    </div>
+    <div>
+      <p class="panel-label">Personal bests</p>
+      <ul id="pbList" class="intel-list"></ul>
+      <p class="muted small" id="intelPbSummary"></p>
+    </div>
+    <div>
+      <p class="panel-label">Risk windows</p>
+      <ul id="riskList" class="intel-list"></ul>
+      <p class="muted small" id="intelRiskSummary"></p>
+    </div>
+    <div class="full">
+      <p class="panel-label">Readiness board</p>
+      <div id="readinessBoard" class="intel-card muted">Need more data to gauge readiness.</div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Session breakdown <span class="info-tip" data-tooltip="ACWR compares acute load (7d average) to chronic load (28d average). Load = RPE × minutes; monotony/strain flag repetitive high weeks.">?</span></h3>
+      <p class="muted">Per-athlete metrics, ACWR estimates, monotony/strain, and flagged risks.</p>
+    </div>
+    <div class="chip-row">
+      <button class="chip" data-tab="all">Rollup</button>
+      <button class="chip" data-tab="events">Per event</button>
+    </div>
+  </header>
+  <div class="table-wrapper">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Scope</th>
+          <th>Athlete</th>
+          <th>Event</th>
+          <th>Group</th>
+          <th>Sessions</th>
+          <th>Best (m)</th>
+          <th>Load (AU)</th>
+          <th>Throws</th>
+          <th>ACWR</th>
+          <th>Monotony</th>
+          <th>Strain</th>
+          <th>Risk</th>
+        </tr>
+      </thead>
+      <tbody id="summaryTable">
+        <tr><td colspan="12">No sessions logged yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

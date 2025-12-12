@@ -1,0 +1,40 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Privacy & data</h3>
+      <p class="muted">What we store, where it lives, and who can see it.</p>
+    </div>
+  </header>
+  <div class="summary-grid">
+    <article class="subpanel">
+      <p class="panel-label">What we store</p>
+      <ul class="quickstart-list">
+        <li>Athlete profiles (name, optional height/weight, team, notes).</li>
+        <li>Training sessions (date, event, best distance, throws, RPE, tags, notes).</li>
+        <li>Strength logs (date, exercise, load, reps, notes).</li>
+        <li>Coach accounts (name, email, hashed password, role).</li>
+      </ul>
+    </article>
+    <article class="subpanel">
+      <p class="panel-label">Where it’s stored</p>
+      <p class="muted small">Data lives in the configured database for this deployment (see your admin). Backups may retain data for a limited time before rotation.</p>
+    </article>
+    <article class="subpanel">
+      <p class="panel-label">Who can see/edit</p>
+      <ul class="quickstart-list">
+        <li><strong>Head coach:</strong> full access to roster, sessions, teams, reports, imports/exports.</li>
+        <li><strong>Assistant:</strong> log/edit sessions and athletes; no role or team management.</li>
+        <li><strong>Trainer/S&C (future):</strong> read analytics; limited write to strength/notes.</li>
+      </ul>
+      <p class="muted small">Each deployment is intended for a single program; cross-program access is not provided.</p>
+    </article>
+    <article class="subpanel">
+      <p class="panel-label">Retention & removal</p>
+      <p class="muted small">Data stays until your program owner removes it. Backups may persist for the retention window set by your host. For removal requests, contact your program admin.</p>
+    </article>
+  </div>
+</section>
+{% endblock %}

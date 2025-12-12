@@ -1,0 +1,149 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel" id="load-readiness">
+  <header class="panel-header">
+    <div>
+      <h3>Load & readiness <span class="info-tip" data-tooltip="Load = volume × RPE. Acute load is last 7 days; chronic load is 28-day average. ACWR = acute ÷ chronic.">?</span></h3>
+      <p class="muted">Session totals, throw volume, and PBs for your selected window.</p>
+      <p class="muted small">Window: acute {{ acute_days if acute_days else 7 }} days vs chronic {{ chronic_days if chronic_days else 28 }} days.</p>
+    </div>
+    <div class="chip-row">
+      <a class="btn btn-ghost" href="{{ url_for('metrics_help') }}">How we calculate</a>
+    </div>
+    <div class="chip-row">
+      <button class="chip" data-summary-toggle="week">This week</button>
+      <button class="chip" data-summary-toggle="month">Season</button>
+    </div>
+  </header>
+  {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+  <div class="panel-note muted small">Demo data is shown to illustrate analytics. It will disappear after you log your own sessions.</div>
+  {% endif %}
+  <div class="metrics-grid compact">
+    <article class="metric-card">
+      <p class="metric-label">Sessions (count)</p>
+      <div class="metric-value" id="statSessions">--</div>
+      <p class="metric-sub" id="statDateRange">Current window</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Throws (count)</p>
+      <div class="metric-value" id="statThrows">--</div>
+      <p class="metric-sub">Volume logged</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Total load (AU) <span class="info-tip" data-tooltip="Session load = volume × RPE. AU means arbitrary units.">?</span></p>
+      <div class="metric-value" id="statLoad">--</div>
+      <p class="metric-sub">AU across the range</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Average RPE (1–10)</p>
+      <div class="metric-value" id="statAvgRpe">--</div>
+      <p class="metric-sub">Across the chosen window</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Personal best (m)</p>
+      <div class="metric-value" id="statPb">--</div>
+      <p class="metric-sub" id="statPbDate">Log sessions to set a PB.</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Risk alerts <span class="info-tip" data-tooltip="Risk flags appear when acute load significantly exceeds chronic load.">?</span></p>
+      <div class="metric-value" id="riskAlertCount">--</div>
+      <p class="metric-sub"><a href="{{ url_for('logs_page') }}#risk">View sessions at risk</a></p>
+    </article>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Performance over time <span class="info-tip" data-tooltip="Best distances (m) plotted with throw volume to spot momentum and spikes.">?</span></h3>
+      <p class="muted">Overlay best distances with throw volume to spot momentum.</p>
+    </div>
+    <div class="chip-row">
+      <button class="chip" data-summary-toggle="week">This week</button>
+      <button class="chip" data-summary-toggle="month">Season</button>
+    </div>
+  </header>
+  {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+  <div class="panel-note muted small">Demo data is shown to illustrate performance trends. It will disappear after you log your own sessions.</div>
+  {% endif %}
+  <div class="chart-area">
+    <div class="chart-placeholder" id="chartPlaceholder">Log sessions to see trends.</div>
+    <canvas id="performanceChart" height="320"></canvas>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Load vs performance</h3>
+      <p class="muted">Track how RPE and volume pair with best throws. Window: last {{ chronic_days if chronic_days else 28 }} days.</p>
+    </div>
+  </header>
+  <div class="summary-grid">
+    <div>
+      <p class="panel-label">Readiness cues</p>
+      <div id="intelReadiness" class="muted">Need more data to gauge readiness.</div>
+    </div>
+    <div>
+      <p class="panel-label">PB focus</p>
+      <ul id="pbList" class="intel-list"></ul>
+      <p class="muted small" id="intelPbSummary"></p>
+    </div>
+    <div>
+      <p class="panel-label">Risk windows</p>
+      <ul id="trainingRiskList" class="intel-list"></ul>
+      <p class="muted small" id="intelRiskSummary"></p>
+    </div>
+    <div>
+      <p class="panel-label">Signals</p>
+      <ul id="trainingIntelList" class="intel-list"></ul>
+    </div>
+    <div class="full">
+      <p class="panel-label">Readiness board</p>
+      <div id="readinessBoard" class="intel-card muted">Need more data to gauge readiness.</div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Training blocks</h3>
+      <p class="muted">Blocks and cycles laid out as a horizontal track.</p>
+    </div>
+  </header>
+  <div id="trainingTimeline" class="timeline-grid"></div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Tag usage</h3>
+      <p class="muted">Focus areas that show up most often in the block.</p>
+    </div>
+  </header>
+  <div class="dual-grid">
+    <div>
+      <p class="panel-label">Most-used tags</p>
+      <ul id="tagFocus" class="intel-list"></ul>
+    </div>
+    <div>
+      <p class="panel-label">CLI readout</p>
+      <div class="cli-card">
+        <div class="panel-header">
+          <div>
+            <p class="muted small">Sync with CLI</p>
+            <p class="panel-label">Latest summary</p>
+          </div>
+          <div class="chip-row">
+            <a class="btn btn-ghost" href="{{ url_for('metrics_help') }}">How we calculate</a>
+            <button class="btn btn-soft" id="refreshCliSummary">Refresh</button>
+          </div>
+        </div>
+        <pre id="cliSummaryText" class="code-block">Loading CLI summary…</pre>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

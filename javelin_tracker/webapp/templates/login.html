@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block body %}
+<main class="auth-shell" data-page="login">
+  <section class="auth-card">
+    <div class="auth-header">
+      <div class="auth-brand">
+        <span class="brand-dot"></span>
+        <div>
+          <p class="eyebrow muted">Throws Control</p>
+          <h1>Coach command center</h1>
+        </div>
+      </div>
+      <p class="muted">Access your dashboards, logs, and ThrowAI tools.</p>
+    </div>
+    {% if error %}
+    <div class="alert">{{ error }}</div>
+    {% endif %}
+    <form method="post" class="stack-form">
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" placeholder="coach@example.com" required />
+      </label>
+      <label>
+        <span>Password</span>
+        <input type="password" name="password" required />
+      </label>
+      <button type="submit" class="btn btn-primary">Continue</button>
+      <p class="muted small">No account? <a href="{{ url_for('register') }}">Create one</a></p>
+    </form>
+  </section>
+</main>
+{% endblock %}

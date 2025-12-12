@@ -90,18 +90,23 @@ def compute_daily_metrics(
     df_sessions: pd.DataFrame,
     group_keys: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    """Aggregate session dataframe into daily workload metrics."""
+    """Aggregate session dataframe into daily workload and readiness metrics."""
     group_keys = [key for key in (group_keys or []) if key in df_sessions.columns]
     base_columns = group_keys + [
         "date",
         "load",
-        "session_count",
         "acute_load",
+        "acute_load_sum",
         "chronic_load",
+        "chronic_load_sum",
+        "session_count",
         "acwr_rolling",
         "acute_ewma",
         "chronic_ewma",
         "acwr_ewma",
+        "monotony_7d",
+        "strain_7d",
+        "load_cv_7d",
         "risk_flag",
     ]
     if df_sessions.empty:
@@ -137,16 +142,24 @@ def _compute_daily_metrics_single(df_sessions: pd.DataFrame) -> pd.DataFrame:
         .set_index("date")
     )
 
-    daily["acute_load"] = daily["load"].rolling(window=7, min_periods=1).sum()
-    daily["chronic_load"] = daily["load"].rolling(window=28, min_periods=1).mean()
+    # Acute/chronic load expressed as weekly and monthly averages for better ACWR stability.
+    daily["acute_load"] = daily["load"].rolling(window=7, min_periods=3).mean()
+    daily["acute_load_sum"] = daily["load"].rolling(window=7, min_periods=1).sum()
+    daily["chronic_load"] = daily["load"].rolling(window=28, min_periods=7).mean()
+    daily["chronic_load_sum"] = daily["load"].rolling(window=28, min_periods=7).sum()
     daily["acwr_rolling"] = _safe_divide(daily["acute_load"], daily["chronic_load"])
 
     daily["acute_ewma"] = daily["load"].ewm(span=7, adjust=False).mean()
     daily["chronic_ewma"] = daily["load"].ewm(span=28, adjust=False).mean()
     daily["acwr_ewma"] = _safe_divide(daily["acute_ewma"], daily["chronic_ewma"])
 
+    monotony, strain, load_cv = _monotony_and_strain(daily["load"])
+    daily["monotony_7d"] = monotony
+    daily["strain_7d"] = strain
+    daily["load_cv_7d"] = load_cv
+
     daily["risk_flag"] = daily.apply(
-        lambda row: _risk_category(row["acwr_rolling"], row["acwr_ewma"]),
+        _risk_category_row,
         axis=1,
     )
     return daily.reset_index()
@@ -170,6 +183,8 @@ def compute_weekly_summary(
         "throw_volume",
         "acwr_rolling",
         "acwr_ewma",
+        "monotony_7d",
+        "strain_7d",
         "risk_flag",
     ]
     if df_sessions.empty:
@@ -209,6 +224,8 @@ def compute_weekly_summary(
             .agg(
                 acwr_rolling=("acwr_rolling", "last"),
                 acwr_ewma=("acwr_ewma", "last"),
+                monotony_7d=("monotony_7d", "last"),
+                strain_7d=("strain_7d", "last"),
                 risk_flag=("risk_flag", lambda flags: _aggregate_weekly_risk(list(flags))),
             )
             .reset_index()
@@ -217,15 +234,21 @@ def compute_weekly_summary(
     else:
         weekly["acwr_rolling"] = pd.NA
         weekly["acwr_ewma"] = pd.NA
+        weekly["monotony_7d"] = pd.NA
+        weekly["strain_7d"] = pd.NA
         weekly["risk_flag"] = ""
 
-    for column in ("avg_rpe", "total_load", "acwr_rolling", "acwr_ewma"):
+    for column in ("avg_rpe", "total_load", "acwr_rolling", "acwr_ewma", "monotony_7d", "strain_7d"):
         if column in weekly.columns:
             weekly[column] = pd.to_numeric(weekly[column], errors="coerce")
     weekly["avg_rpe"] = weekly["avg_rpe"].round(2)
     weekly["total_load"] = weekly["total_load"].round(1)
     weekly["acwr_rolling"] = weekly["acwr_rolling"].round(2)
     weekly["acwr_ewma"] = weekly["acwr_ewma"].round(2)
+    if "monotony_7d" in weekly:
+        weekly["monotony_7d"] = weekly["monotony_7d"].round(2)
+    if "strain_7d" in weekly:
+        weekly["strain_7d"] = weekly["strain_7d"].round(1)
     ordered = group_keys + [col for col in weekly.columns if col not in group_keys]
     return weekly[ordered]
 
@@ -287,14 +310,66 @@ def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     return ratio.replace([pd.NA, pd.NaT], pd.NA)
 
 
-def _risk_category(acwr_roll: float, acwr_ewma: float) -> str:
+def _monotony_and_strain(load: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Compute 7-day training monotony, strain, and coefficient of variation.
+
+    Monotony: mean / std over 7 days (with a floor to avoid divide-by-zero).
+    Strain: acute weekly load sum × monotony (Gabbett, 2010).
+    """
+    rolling = load.rolling(window=7, min_periods=4)
+    mean7 = rolling.mean()
+    std7 = rolling.std(ddof=0)
+
+    monotony = _safe_divide(mean7, std7)
+    # When variation is near-zero but load exists, flag a high but bounded monotony.
+    low_var = (std7 <= 1e-6) & mean7.notna() & (mean7 > 0)
+    monotony = monotony.mask(low_var, 2.4)
+    monotony = monotony.clip(upper=4.0)
+
+    load_cv = _safe_divide(std7, mean7)
+    strain = rolling.sum() * monotony
+    return monotony, strain, load_cv
+
+
+def _risk_category_row(row: pd.Series) -> str:
     lower, sweet_max, high = _thresholds()
-    values = [value for value in (acwr_roll, acwr_ewma) if pd.notna(value)]
-    if not values:
-        return ""
-    if any(value > high or value < lower for value in values):
+    acwr_values = [value for value in (row.get("acwr_rolling"), row.get("acwr_ewma")) if pd.notna(value)]
+    monotony = row.get("monotony_7d")
+    strain = row.get("strain_7d")
+    acute = row.get("acute_load")
+    chronic = row.get("chronic_load")
+
+    risk_score = 0
+    severe = False
+
+    for value in acwr_values:
+        if value > high or value < lower * 0.85:
+            severe = True
+        if value > sweet_max or value < lower:
+            risk_score += 1
+
+    if pd.notna(monotony):
+        if monotony >= 2.5:
+            risk_score += 2
+        elif monotony >= 1.75:
+            risk_score += 1
+
+    if pd.notna(strain):
+        if strain >= 1400:
+            risk_score += 2
+        elif strain >= 900:
+            risk_score += 1
+
+    if pd.notna(acute) and pd.notna(chronic) and chronic > 0:
+        if acute >= chronic * 1.5:
+            severe = True
+        elif acute >= chronic * 1.25:
+            risk_score += 1
+
+    if severe or risk_score >= 3:
         return "HIGH"
-    if any(value > sweet_max for value in values):
+    if risk_score >= 1:
         return "MODERATE"
     return "LOW"
 

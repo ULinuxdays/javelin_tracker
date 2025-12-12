@@ -21,7 +21,7 @@ def _make_sessions() -> list[dict[str, object]]:
             duration = 10.0
         else:
             rpe = 10
-            duration = 25.0  # load spike on final day
+            duration = 35.0  # load spike on final day
         sessions.append(
             {
                 "date": day.isoformat(),
@@ -52,6 +52,9 @@ def test_daily_metrics_flags_high_acwr() -> None:
     final_day = daily.iloc[-1]
     assert final_day["acwr_rolling"] > 1.5
     assert final_day["risk_flag"] == "HIGH"
+    assert "monotony_7d" in daily.columns
+    assert final_day["monotony_7d"] >= 0
+    assert final_day["strain_7d"] >= 0
 
 
 def test_weekly_summary_includes_acwr_metrics() -> None:
@@ -60,6 +63,8 @@ def test_weekly_summary_includes_acwr_metrics() -> None:
     weekly = compute_weekly_summary(df, daily)
     assert "acwr_rolling" in weekly.columns
     assert "acwr_ewma" in weekly.columns
+    assert "monotony_7d" in weekly.columns
+    assert "strain_7d" in weekly.columns
     assert weekly["acwr_rolling"].notna().any()
 
 

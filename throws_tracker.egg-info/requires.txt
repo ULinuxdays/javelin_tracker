@@ -1,0 +1,13 @@
+typer>=0.9
+pandas>=2.0
+matplotlib>=3.8
+numpy>=1.23
+reportlab>=4.0
+pyarrow>=10.0
+Flask>=3.0
+
+[dev]
+pytest>=8.0
+ruff>=0.6
+build>=1.2
+twine>=5.1

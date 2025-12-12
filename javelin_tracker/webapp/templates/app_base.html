@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar__brand">
+      <span class="brand-dot"></span>
+      <div>
+        <p class="eyebrow muted">Throws Control</p>
+        <p class="brand-name">Coach Command</p>
+      </div>
+    </div>
+    <div class="sidebar__greeting">Hi {{ g.user.name if g.user else 'Coach' }} · {{ g.user.role|replace('_',' ') if g.user else '' }}</div>
+    <nav class="sidebar__nav">
+      <a href="{{ url_for('dashboard') }}" class="sidebar__link {% if page_slug == 'dashboard' %}is-active{% endif %}" aria-current="{% if page_slug == 'dashboard' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Dashboard</span>
+      </a>
+      <a href="{{ url_for('quickstart_page') }}" class="sidebar__link {% if page_slug == 'quickstart' %}is-active{% endif %}" aria-current="{% if page_slug == 'quickstart' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Quick start</span>
+      </a>
+      <a href="{{ url_for('sessions_page') }}" class="sidebar__link {% if page_slug == 'sessions' %}is-active{% endif %}" aria-current="{% if page_slug == 'sessions' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Sessions</span>
+      </a>
+      <a href="{{ url_for('logs_page') }}" class="sidebar__link {% if page_slug == 'logs' %}is-active{% endif %}" aria-current="{% if page_slug == 'logs' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Logs</span>
+      </a>
+      <a href="{{ url_for('analytics_page') }}" class="sidebar__link {% if page_slug == 'analytics' %}is-active{% endif %}" aria-current="{% if page_slug == 'analytics' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Analytics</span>
+      </a>
+      <a href="{{ url_for('athletes_page') }}" class="sidebar__link {% if page_slug == 'athletes' %}is-active{% endif %}" aria-current="{% if page_slug == 'athletes' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Athletes</span>
+      </a>
+      <a href="{{ url_for('weight_room_page') }}" class="sidebar__link {% if page_slug == 'weightroom' %}is-active{% endif %}" aria-current="{% if page_slug == 'weightroom' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Weight Room</span>
+      </a>
+      <a href="{{ url_for('training_page') }}" class="sidebar__link {% if page_slug == 'throwai' %}is-active{% endif %}" aria-current="{% if page_slug == 'throwai' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>ThrowAI</span>
+      </a>
+      <a href="{{ url_for('reports_page') }}" class="sidebar__link {% if page_slug == 'reports' %}is-active{% endif %}" aria-current="{% if page_slug == 'reports' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Reports</span>
+      </a>
+      <a href="{{ url_for('metrics_help') }}" class="sidebar__link {% if page_slug == 'metrics_help' %}is-active{% endif %}" aria-current="{% if page_slug == 'metrics_help' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Load & readiness</span>
+      </a>
+    </nav>
+    <div class="sidebar__actions">
+      <a class="btn btn-ghost" href="{{ url_for('sessions_page') }}">Log session</a>
+      <form method="post" action="{{ url_for('auth_logout') }}">
+        <button type="submit" class="btn btn-ghost">Sign out</button>
+      </form>
+    </div>
+  </aside>
+  <main class="app-main" data-page="{{ page_slug }}">
+    <div class="main-inner">
+      <header class="topbar">
+        <div class="topbar__title">
+          <p class="eyebrow">Control room</p>
+          <h1>{{ page_title if page_title else (page_slug|replace('_', ' ')|title if page_slug else 'Overview') }}</h1>
+        </div>
+        <div class="topbar__actions">
+          {% block topbar_actions %}
+          <a class="btn btn-soft" href="{{ url_for('sessions_page') }}?range=this_week">Plan week</a>
+          <a class="btn btn-ghost" href="{{ url_for('analytics_page') }}#load-readiness">Monitor load</a>
+          <a class="btn btn-primary" href="{{ url_for('reports_page') }}?range=this_week">Generate report</a>
+          {% endblock %}
+        </div>
+      </header>
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+{% endblock %}

@@ -59,6 +59,17 @@ def _database_file() -> Path:
     return path
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, alter_sql: str) -> None:
+    try:
+        cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if any(col[1] == column for col in cols):
+            return
+        conn.execute(alter_sql)
+        conn.commit()
+    except Exception:
+        return
+
+
 def load_sessions() -> List[Any]:
     sessions_file = _sessions_file()
     if not sessions_file.exists():
@@ -90,9 +101,20 @@ def _ensure_database() -> None:
             """
             PRAGMA foreign_keys = ON;
 
+            CREATE TABLE IF NOT EXISTS Teams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                program_name TEXT,
+                school_name TEXT,
+                color TEXT,
+                short_code TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS Athletes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
+                team_id INTEGER,
                 height_cm REAL,
                 weight_kg REAL,
                 bmi REAL,
@@ -100,18 +122,21 @@ def _ensure_database() -> None:
                 throw_distances TEXT,
                 notes TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (team_id) REFERENCES Teams(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS StrengthLogs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 athlete_id INTEGER NOT NULL,
+                team_id INTEGER,
                 logged_at TEXT NOT NULL,
                 exercise TEXT NOT NULL,
                 load_kg REAL,
                 reps INTEGER,
                 notes TEXT,
-                FOREIGN KEY (athlete_id) REFERENCES Athletes(id) ON DELETE CASCADE
+                FOREIGN KEY (athlete_id) REFERENCES Athletes(id) ON DELETE CASCADE,
+                FOREIGN KEY (team_id) REFERENCES Teams(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS ThrowLogs (
@@ -139,6 +164,8 @@ def _ensure_database() -> None:
             );
             """
         )
+        _ensure_column(conn, "Athletes", "team_id", "ALTER TABLE Athletes ADD COLUMN team_id INTEGER")
+        _ensure_column(conn, "StrengthLogs", "team_id", "ALTER TABLE StrengthLogs ADD COLUMN team_id INTEGER")
     finally:
         conn.close()
     _DB_INITIALISED = True
@@ -172,6 +199,18 @@ def export_csv(path: Path | str) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    with target.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(flattened)
+    return target
+
+
+def export_sessions_csv(path: Path | str, sessions: Iterable[dict[str, Any]]) -> Path:
+    flattened = [_flatten(record) for record in sessions]
+    fieldnames = sorted({key for row in flattened for key in row.keys()})
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -402,7 +441,7 @@ def analyze_trends(
     with open_database(readonly=True) as conn:
         strength_rows = conn.execute(
             """
-            SELECT logged_at, load_kg
+            SELECT logged_at, load_kg, reps
             FROM StrengthLogs
             WHERE athlete_id = ? AND load_kg IS NOT NULL
             ORDER BY logged_at
@@ -419,8 +458,8 @@ def analyze_trends(
             (athlete_id,),
         ).fetchall()
 
-    strength_records = _to_time_series(strength_rows)
-    throw_records = _to_time_series(throw_rows)
+    strength_records = _strength_time_series(strength_rows)
+    throw_records = _throw_time_series(throw_rows)
 
     strength_recent = _window_values(strength_records, recent_start, now)
     strength_baseline = _window_values(strength_records, baseline_start, recent_start)
@@ -434,6 +473,10 @@ def analyze_trends(
             _average(strength_recent), _average(strength_baseline)
         ),
         "trend_slope_per_day": _trend_slope(strength_records),
+        "coefficient_of_variation": _coefficient_of_variation(strength_recent),
+        "effect_size": _effect_size(strength_recent, strength_baseline),
+        "n_recent": len(strength_recent),
+        "n_baseline": len(strength_baseline),
     }
     throw_trend = {
         "recent_avg_distance": _average(throws_recent),
@@ -442,6 +485,10 @@ def analyze_trends(
             _average(throws_recent), _average(throws_baseline)
         ),
         "trend_slope_per_day": _trend_slope(throw_records),
+        "coefficient_of_variation": _coefficient_of_variation(throws_recent),
+        "effect_size": _effect_size(throws_recent, throws_baseline),
+        "n_recent": len(throws_recent),
+        "n_baseline": len(throws_baseline),
     }
 
     return {
@@ -452,20 +499,87 @@ def analyze_trends(
     }
 
 
+def _coerce_timestamp(value: Any) -> datetime | None:
+    """Parse timestamps and normalise to UTC."""
+    try:
+        timestamp = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    else:
+        timestamp = timestamp.astimezone(timezone.utc)
+    return timestamp
+
+
+def _collapse_by_day(
+    records: list[tuple[datetime, float]],
+    reducer,
+) -> list[tuple[datetime, float]]:
+    """Collapse multiple entries on the same date using the supplied reducer."""
+    buckets: dict[datetime.date, list[float]] = {}
+    tzinfo = timezone.utc
+    for ts, value in records:
+        tzinfo = ts.tzinfo or tzinfo
+        buckets.setdefault(ts.date(), []).append(float(value))
+    collapsed: list[tuple[datetime, float]] = []
+    for day, values in buckets.items():
+        combined = reducer(values)
+        collapsed.append((datetime.combine(day, datetime.min.time(), tzinfo), float(combined)))
+    collapsed.sort(key=lambda item: item[0])
+    return collapsed
+
+
+def _strength_time_series(rows: list[tuple[Any, Any, Any]]) -> list[tuple[datetime, float]]:
+    """
+    Convert strength logs into a per-day tonnage series (load × reps).
+    Multiple sets on the same day are summed to represent total stimulus.
+    """
+    entries: list[tuple[datetime, float]] = []
+    for logged_at, load, reps in rows:
+        ts = _coerce_timestamp(logged_at)
+        if ts is None or load is None:
+            continue
+        try:
+            rep_count = max(1, int(reps)) if reps is not None else 1
+        except (TypeError, ValueError):
+            rep_count = 1
+        try:
+            value = float(load) * rep_count
+        except (TypeError, ValueError):
+            continue
+        entries.append((ts, value))
+    return _collapse_by_day(entries, sum)
+
+
+def _throw_time_series(rows: list[tuple[Any, Any]]) -> list[tuple[datetime, float]]:
+    """
+    Convert throw logs into a per-day best-distance series.
+    """
+    entries: list[tuple[datetime, float]] = []
+    for logged_at, value in rows:
+        ts = _coerce_timestamp(logged_at)
+        if ts is None or value is None:
+            continue
+        try:
+            distance = float(value)
+        except (TypeError, ValueError):
+            continue
+        entries.append((ts, distance))
+    # Use max distance per day to emphasise performance signal.
+    return _collapse_by_day(entries, max)
+
+
 def _to_time_series(rows: list[tuple[str, float]]) -> list[tuple[datetime, float]]:
+    """Legacy helper used elsewhere (no daily collapsing)."""
     series: list[tuple[datetime, float]] = []
     for logged_at, value in rows:
         if value is None:
             continue
-        try:
-            timestamp = datetime.fromisoformat(str(logged_at))
-        except ValueError:
+        ts = _coerce_timestamp(logged_at)
+        if ts is None:
             continue
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        else:
-            timestamp = timestamp.astimezone(timezone.utc)
-        series.append((timestamp, float(value)))
+        series.append((ts, float(value)))
     return series
 
 
@@ -481,10 +595,53 @@ def _average(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def _variance(values: list[float]) -> float | None:
+    if len(values) < 2:
+        return None
+    mean = _average(values)
+    if mean is None:
+        return None
+    return sum((value - mean) ** 2 for value in values) / len(values)
+
+
 def _percent_change(current: float | None, previous: float | None) -> float | None:
     if current is None or previous is None or previous == 0:
         return None
     return ((current - previous) / previous) * 100.0
+
+
+def _coefficient_of_variation(values: list[float]) -> float | None:
+    if len(values) < 2:
+        return None
+    mean = _average(values)
+    if mean is None or mean == 0:
+        return None
+    var = _variance(values)
+    if var is None:
+        return None
+    return math.sqrt(var) / mean
+
+
+def _effect_size(recent: list[float], baseline: list[float]) -> float | None:
+    """
+    Compute a simple Cohen's d between recent and baseline windows.
+    """
+    if len(recent) < 2 or len(baseline) < 2:
+        return None
+    mean_recent = _average(recent)
+    mean_base = _average(baseline)
+    if mean_recent is None or mean_base is None:
+        return None
+    var_recent = _variance(recent)
+    var_base = _variance(baseline)
+    if var_recent is None or var_base is None:
+        return None
+    pooled = ((len(recent) - 1) * var_recent + (len(baseline) - 1) * var_base) / max(
+        1, (len(recent) + len(baseline) - 2)
+    )
+    if pooled <= 0:
+        return None
+    return (mean_recent - mean_base) / math.sqrt(pooled)
 
 
 def _trend_slope(records: list[tuple[datetime, float]]) -> float | None:
@@ -525,11 +682,20 @@ def adjust_workload(
 
     recommendations: dict[str, Any] = {"strength": {}, "throws": {}}
 
+    strength_effect = strength_info.get("effect_size")
+    throw_effect = throw_info.get("effect_size")
+    strength_cv = strength_info.get("coefficient_of_variation")
+    throw_cv = throw_info.get("coefficient_of_variation")
+    strength_samples = strength_info.get("n_recent") or 0
+    throw_samples = throw_info.get("n_recent") or 0
+
     strength_change = strength_info.get("load_change_pct")
     if (
         strength_change is not None
         and strength_change >= strength_threshold_pct
         and benchmarks
+        and strength_samples >= 3
+        and (strength_effect is None or strength_effect >= 0.15)
     ):
         suggestions: dict[str, dict[str, float]] = {}
         for lift, current_max in benchmarks.items():
@@ -537,15 +703,17 @@ def adjust_workload(
                 current_value = float(current_max)
             except (TypeError, ValueError):
                 continue
-            target = current_value * (1 + strength_increment_pct)
+            effect_multiplier = 1 + min(0.6, max(0.0, (strength_effect or 0.0)))
+            target = current_value * (1 + strength_increment_pct * effect_multiplier)
             suggestions[lift] = {
                 "current_max": current_value,
                 "target_max": round(target, 2),
-                "increase_pct": strength_increment_pct * 100.0,
+                "increase_pct": round(strength_increment_pct * effect_multiplier * 100.0, 2),
+                "signal_strength": round(strength_effect, 2) if strength_effect is not None else None,
             }
         if suggestions:
             recommendations["strength"] = {
-                "message": "Performance trending up; increase loads slightly to maintain overload stimulus.",
+                "message": "Performance trending up with a meaningful signal; increase loads slightly to maintain overload stimulus.",
                 "suggestions": suggestions,
             }
 
@@ -554,6 +722,8 @@ def adjust_workload(
         throw_change is not None
         and throw_change >= throw_threshold_pct
         and throw_history
+        and throw_samples >= 3
+        and (throw_effect is None or throw_effect >= 0.1)
     ):
         throw_suggestions: dict[str, dict[str, float]] = {}
         for event, distances in throw_history.items():
@@ -562,11 +732,13 @@ def adjust_workload(
             if not numeric:
                 continue
             recent_best = max(numeric)
-            target = recent_best * (1 + throw_increment_pct)
+            effect_multiplier = 1 + min(0.5, max(0.0, (throw_effect or 0.0)))
+            target = recent_best * (1 + throw_increment_pct * effect_multiplier)
             throw_suggestions[event] = {
                 "recent_best": recent_best,
                 "target_best": round(target, 2),
-                "increase_pct": throw_increment_pct * 100.0,
+                "increase_pct": round(throw_increment_pct * effect_multiplier * 100.0, 2),
+                "signal_strength": round(throw_effect, 2) if throw_effect is not None else None,
             }
         if throw_suggestions:
             recommendations["throws"] = {
@@ -582,16 +754,36 @@ def adjust_workload(
     throw_slope = throw_info.get("trend_slope_per_day") or 0.0
     strength_delta = (strength_info.get("load_change_pct") or 0.0) / 100.0
     throw_delta = (throw_info.get("distance_change_pct") or 0.0) / 100.0
+    variability_penalty_strength = 0.0
+    variability_penalty_throw = 0.0
+    if strength_cv and strength_cv > 0.35:
+        variability_penalty_strength = min(0.08, (strength_cv - 0.35) * 0.2)
+    if throw_cv and throw_cv > 0.25:
+        variability_penalty_throw = min(0.06, (throw_cv - 0.25) * 0.15)
 
     # Convert to soft multipliers: small increases for upward trends, small decreases for downward trends.
-    strength_factor = 1.0 + _clip(0.5 * strength_delta + 0.0005 * strength_slope, -0.1, 0.1)
-    throw_factor = 1.0 + _clip(0.5 * throw_delta + 0.0005 * throw_slope, -0.1, 0.1)
+    strength_factor = 1.0 + _clip(
+        0.5 * strength_delta + 0.0005 * strength_slope + 0.05 * (strength_effect or 0.0) - variability_penalty_strength,
+        -0.12,
+        0.12,
+    )
+    throw_factor = 1.0 + _clip(
+        0.5 * throw_delta + 0.0005 * throw_slope + 0.04 * (throw_effect or 0.0) - variability_penalty_throw,
+        -0.1,
+        0.1,
+    )
 
     recommendations["strength"]["readiness_multiplier"] = round(strength_factor, 3)
     recommendations["throws"]["readiness_multiplier"] = round(throw_factor, 3)
 
     # Flag deload when trends decline notably
-    recommendations["deload"] = bool((strength_delta < -0.05) or (throw_delta < -0.03))
+    recommendations["deload"] = bool(
+        (strength_delta < -0.05)
+        or (throw_delta < -0.03)
+        or (strength_effect is not None and strength_effect < -0.35)
+        or (throw_effect is not None and throw_effect < -0.25)
+        or (strength_cv is not None and strength_cv > 0.45)
+    )
 
     return recommendations
 
@@ -930,6 +1122,36 @@ def routine_to_json(
 VALID_METRICS = {"throw_distance", "bench_1rm", "squat_1rm", "session_load"}
 
 
+def _collapse_same_day(series: list[tuple[datetime, float]], reducer) -> list[tuple[datetime, float]]:
+    """Collapse multiple samples recorded on the same day."""
+    buckets: dict[datetime.date, list[float]] = {}
+    tzinfo = timezone.utc
+    for ts, value in series:
+        tzinfo = ts.tzinfo or tzinfo
+        buckets.setdefault(ts.date(), []).append(float(value))
+    collapsed: list[tuple[datetime, float]] = []
+    for day, values in buckets.items():
+        collapsed.append((datetime.combine(day, datetime.min.time(), tzinfo), reducer(values)))
+    collapsed.sort(key=lambda item: item[0])
+    return collapsed
+
+
+def _winsorize_series(series: list[tuple[datetime, float]], z_limit: float = 3.5) -> list[tuple[datetime, float]]:
+    """Clamp extreme values using a MAD-based winsorisation to tame outliers."""
+    if len(series) < 4:
+        return series
+    values = np.array([val for _, val in series], dtype=float)
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median)))
+    if mad == 0:
+        return series
+    scale = 1.4826 * mad  # convert MAD to approximate std
+    lower = median - z_limit * scale
+    upper = median + z_limit * scale
+    clamped = np.clip(values, lower, upper)
+    return [(series[idx][0], float(clamped[idx])) for idx in range(len(series))]
+
+
 def predict_trends(
     athlete_id: int,
     metric: str,
@@ -942,14 +1164,46 @@ def predict_trends(
 
     with open_database(readonly=True) as conn:
         series = _fetch_metric_series(conn, athlete_id, metric)
+        if len(series) < 3:
+            synthetic = _synthetic_series_from_profile(conn, athlete_id, metric)
+            if synthetic:
+                series = synthetic
+    if series:
+        reducer = sum if metric == "session_load" else max
+        series = _collapse_same_day(series, reducer)
+        series = _winsorize_series(series)
 
     if len(series) < 3:
         LOGGER.warning("Not enough data to model %s for athlete %s", metric, athlete_id)
+        # If we have at least one point, return a flat projection instead of empty.
+        if len(series) == 1:
+            value = float(series[0][1])
+            last_date = series[0][0]
+            forecasts = [
+                ((last_date + timedelta(days=step)).date().isoformat(), value)
+                for step in range(1, days_ahead + 1)
+            ]
+            return {"forecasts": forecasts, "model": "flat", "confidence": 0.0, "trend": "flat"}
+        if len(series) == 2:
+            # Simple linear extrapolation for two points
+            (t0, v0), (t1, v1) = series
+            delta_days = max(1, (t1 - t0).days)
+            slope = (float(v1) - float(v0)) / delta_days
+            last_date = t1
+            forecasts = []
+            for step in range(1, days_ahead + 1):
+                val = float(v1) + slope * step
+                if val < 0:
+                    val = 0.0
+                forecasts.append(((last_date + timedelta(days=step)).date().isoformat(), val))
+            trend = "up" if slope > 0 else "down" if slope < 0 else "flat"
+            return {"forecasts": forecasts, "model": "linear_seed", "confidence": None, "trend": trend}
         return {"forecasts": [], "model": "insufficient", "confidence": None, "trend": "flat"}
 
     series.sort(key=lambda item: item[0])
     timestamps = np.array([(ts - series[0][0]).days for ts, _ in series], dtype=float)
     values = np.array([value for _, value in series], dtype=float)
+    value_std = float(np.std(values)) if values.size else 0.0
 
     def _rmse(actual: np.ndarray, fit: np.ndarray) -> float:
         if actual.size == 0 or fit.size == 0:
@@ -1062,9 +1316,10 @@ def predict_trends(
 
     last_actual = values[-1]
     last_forecast = forecasts[-1][1] if forecasts else last_actual
-    if slope_est > 0 and last_forecast > last_actual * 1.005:
+    small_signal = value_std > 0 and abs(slope_est) < value_std * 0.01
+    if slope_est > 0 and not small_signal and last_forecast > last_actual * 1.005:
         trend_direction = "up"
-    elif slope_est < 0 and last_forecast < last_actual * 0.995:
+    elif slope_est < 0 and not small_signal and last_forecast < last_actual * 0.995:
         trend_direction = "down"
     else:
         trend_direction = "flat"
@@ -1130,6 +1385,113 @@ def _fetch_metric_series(
         return _to_time_series(aggregate)
 
     return []
+
+
+def _synthetic_series_from_profile(
+    conn: sqlite3.Connection,
+    athlete_id: int,
+    metric: str,
+) -> list[tuple[datetime, float]]:
+    """
+    Build a minimal series from stored athlete profile data when logs are absent.
+    This keeps forecasts usable after only entering profile benchmarks.
+    """
+    row = conn.execute(
+        "SELECT strength_benchmarks, throw_distances, updated_at, created_at FROM Athletes WHERE id = ?",
+        (athlete_id,),
+    ).fetchone()
+    if not row:
+        return []
+    strength_json, throws_json, updated_at, created_at = row
+    def _coerce_mapping(text: Any) -> dict[str, Any]:
+        if not text:
+            return {}
+        if isinstance(text, dict):
+            return text
+        if isinstance(text, str):
+            # Try strict JSON first
+            try:
+                return json.loads(text)
+            except Exception:
+                pass
+            # Fallback for loose "bench press:100,back squat:110" style strings
+            parts = [chunk.strip() for chunk in text.strip("{}").split(",") if chunk.strip()]
+            mapping: dict[str, Any] = {}
+            for part in parts:
+                if ":" in part:
+                    k, v = part.split(":", 1)
+                    try:
+                        mapping[k.strip().strip('"')] = float(v.strip().strip('"'))
+                    except Exception:
+                        continue
+            return mapping
+        return {}
+
+    strength = _coerce_mapping(strength_json)
+    throws = _coerce_mapping(throws_json)
+
+    base_date = None
+    for ts in (updated_at, created_at):
+        try:
+            base_date = datetime.fromisoformat(str(ts))
+            break
+        except Exception:
+            continue
+    base_date = base_date or _now_utc()
+
+    def _spread(values: list[float]) -> list[tuple[datetime, float]]:
+        return [
+            (base_date - timedelta(days=2 * idx), float(value))
+            for idx, value in enumerate(values)
+            if value is not None
+        ]
+
+    if metric == "throw_distance" and throws:
+        primary = max(
+            throws.items(),
+            key=lambda item: len(item[1]) if isinstance(item[1], list) else 0,
+        )[0]
+        values_raw = throws.get(primary) or []
+        numeric: list[float] = []
+        for v in values_raw:
+            try:
+                numeric.append(float(v))
+            except Exception:
+                continue
+        if numeric:
+            return _spread(numeric[:5])
+
+    if metric == "bench_1rm":
+        bench = strength.get("bench press")
+        if bench is not None:
+            return _spread([float(bench)] * 3)
+
+    if metric == "squat_1rm":
+        squat = strength.get("back squat")
+        if squat is not None:
+            return _spread([float(squat)] * 3)
+
+    if metric == "session_load":
+        primary = None
+        if throws:
+            primary = max(
+                throws.items(),
+                key=lambda item: len(item[1]) if isinstance(item[1], list) else 0,
+            )[0]
+        distances = throws.get(primary) if primary else None
+        numeric: list[float] = []
+        if isinstance(distances, list):
+            for v in distances:
+                try:
+                    numeric.append(float(v))
+                except Exception:
+                    continue
+        if numeric:
+            loads = [max(10.0, d * 1.5) for d in numeric[:3]]
+            return _spread(loads)
+
+    return []
+
 def _fetch_athlete_profile(conn: sqlite3.Connection, athlete_id: int) -> dict[str, Any]:
     row = conn.execute(
         """

@@ -111,6 +111,8 @@ class SummaryRow:
     throw_volume: int
     acwr_rolling: float | None
     acwr_ewma: float | None
+    monotony_7d: float | None
+    strain_7d: float | None
     risk_flag: str
 
 
@@ -327,6 +329,8 @@ def render_summary_table(report: SummaryReport) -> str:
             "throws",
             "acwr_roll",
             "acwr_ewma",
+            "monotony",
+            "strain",
             "risk",
         )
         table_rows = [
@@ -344,6 +348,8 @@ def render_summary_table(report: SummaryReport) -> str:
                 "throws": str(row.throw_volume),
                 "acwr_roll": f"{row.acwr_rolling:.2f}" if row.acwr_rolling is not None else "n/a",
                 "acwr_ewma": f"{row.acwr_ewma:.2f}" if row.acwr_ewma is not None else "n/a",
+                "monotony": f"{row.monotony_7d:.2f}" if row.monotony_7d is not None else "n/a",
+                "strain": f"{row.strain_7d:.0f}" if row.strain_7d is not None else "n/a",
                 "risk": row.risk_flag or "",
             }
             for row in rows
@@ -657,6 +663,8 @@ def _summary_row_from_record(
     throw_volume = int(record.get("throw_volume") or 0)
     acwr_rolling = _as_optional_float(record.get("acwr_rolling"))
     acwr_ewma = _as_optional_float(record.get("acwr_ewma"))
+    monotony_7d = _as_optional_float(record.get("monotony_7d"))
+    strain_7d = _as_optional_float(record.get("strain_7d"))
     risk_flag = str(record.get("risk_flag") or "").upper()
     athlete = str(record.get("athlete") or DEFAULT_ATHLETE_PLACEHOLDER)
     team = record.get("team") or None
@@ -684,6 +692,8 @@ def _summary_row_from_record(
         throw_volume=throw_volume,
         acwr_rolling=acwr_rolling,
         acwr_ewma=acwr_ewma,
+        monotony_7d=monotony_7d,
+        strain_7d=strain_7d,
         risk_flag=risk_flag,
     )
 
@@ -760,6 +770,12 @@ def _convert_weekly_to_monthly(weekly: pd.DataFrame, group_keys: Sequence[str]) 
             else None,
             "acwr_ewma": group["acwr_ewma"].dropna().iloc[-1]
             if group["acwr_ewma"].dropna().any()
+            else None,
+            "monotony_7d": group["monotony_7d"].dropna().iloc[-1]
+            if "monotony_7d" in group and group["monotony_7d"].dropna().any()
+            else None,
+            "strain_7d": group["strain_7d"].dropna().iloc[-1]
+            if "strain_7d" in group and group["strain_7d"].dropna().any()
             else None,
             "risk_flag": _aggregate_risk(group["risk_flag"].tolist()),
         }

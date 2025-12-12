@@ -1,0 +1,78 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Reports</h3>
+      <p class="muted">Snapshot exports with filters for athlete, event, and date windows. Share with head coach, sport science, or compliance.</p>
+      <p class="muted small">Acute load uses the last {{ acute_days if acute_days else 7 }} days before week ending; chronic load uses {{ chronic_days if chronic_days else 28 }}-day average.</p>
+    </div>
+    <div class="chip-row">
+      <a class="btn btn-ghost" href="{{ url_for('metrics_help') }}">How we calculate this</a>
+      <button class="btn btn-soft" id="refreshCliSummary">Refresh CLI summary</button>
+    </div>
+  </header>
+  {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+  <div class="panel-note muted small">Demo data is shown so you can preview reports. It will disappear once you generate reports from your own sessions.</div>
+  {% endif %}
+  <pre id="cliSummaryText" class="code-block">Loading CLI summary…</pre>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Weekly PDF export</h3>
+      <p class="muted">Generate a PDF recap for a specific athlete and week.</p>
+    </div>
+  </header>
+  <div class="subpanel report-card">
+    <div>
+      <p class="panel-label">Last generated report</p>
+      <p class="muted small" id="reportRecipient">No reports yet.</p>
+      <p class="muted small" id="reportTimestamp"></p>
+    </div>
+    <div class="chip-row">
+      <button type="button" class="btn btn-soft" id="reportDownload">Download again</button>
+      <button type="button" class="btn btn-ghost" id="reportEmail">Email</button>
+    </div>
+  </div>
+  <form id="weeklyReportForm" class="stack-form">
+    <div class="form-grid">
+      <label>
+        <span>Athlete</span>
+        <select name="athlete" data-athlete-select>
+          <option value="">Select athlete</option>
+        </select>
+      </label>
+      <label>
+        <span>Team (optional)</span>
+        <select name="team" data-team-select>
+          <option value="">All teams</option>
+        </select>
+      </label>
+      <label>
+        <span>Events (optional, comma separated)</span>
+        <input type="text" name="events" placeholder="javelin, discus" />
+      </label>
+      <label>
+        <span>Week ending (optional)</span>
+        <input type="date" name="week_ending" />
+      </label>
+      <label>
+        <span>Team (optional)</span>
+        <input type="text" name="team" placeholder="Team name" />
+      </label>
+      <label>
+        <span>School / Program (optional)</span>
+        <input type="text" name="school" placeholder="Program name" />
+      </label>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Generate PDF</button>
+    </div>
+  </form>
+  <div class="form-status" id="weeklyReportStatus">Ready — log at least one session this week to export.</div>
+  <div class="panel-note muted small">No reports yet? Generate your first weekly PDF to share with staff.</div>
+</section>
+{% endblock %}
