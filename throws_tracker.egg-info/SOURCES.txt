@@ -13,6 +13,8 @@ javelin_tracker/models.py
 javelin_tracker/reports.py
 javelin_tracker/services.py
 javelin_tracker/storage.py
+javelin_tracker/webapp/__init__.py
+javelin_tracker/webapp/__main__.py
 tests/test_analysis.py
 tests/test_metrics.py
 tests/test_smoke_cli.py

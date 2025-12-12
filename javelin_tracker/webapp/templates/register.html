@@ -3,9 +3,14 @@
 {% block body %}
 <main class="auth-shell" data-page="register">
   <section class="auth-card">
-    <div>
-      <p class="eyebrow">Throws Control</p>
-      <h1>Create account</h1>
+    <div class="auth-header">
+      <div class="auth-brand">
+        <span class="brand-dot"></span>
+        <div>
+          <p class="eyebrow muted">Throws Control</p>
+          <h1>Create account</h1>
+        </div>
+      </div>
       <p class="muted">Separate spaces keep each coach’s data isolated.</p>
     </div>
     {% if error %}
@@ -24,7 +29,7 @@
         <span>Password</span>
         <input type="password" name="password" required />
       </label>
-      <button type="submit" class="primary">Create account</button>
+      <button type="submit" class="btn btn-primary">Create account</button>
       <p class="muted small">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></p>
     </form>
   </section>

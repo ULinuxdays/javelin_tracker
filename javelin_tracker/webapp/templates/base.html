@@ -13,10 +13,13 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}" />
     {% block extra_head %}{% endblock %}
   </head>
-  <body data-page="{{ page_slug|default('') }}">
+  <body class="theme-light" data-page="{{ page_slug|default('') }}">
     {% block body %}{% endblock %}
     <datalist id="athleteOptions"></datalist>
     <div class="toast" id="appToast" role="status" aria-live="polite"></div>
+    <footer class="site-footer">
+      <a href="{{ url_for('privacy') }}">Privacy & data</a>
+    </footer>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" crossorigin="anonymous"></script>
     <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
   </body>

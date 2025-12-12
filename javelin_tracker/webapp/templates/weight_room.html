@@ -4,35 +4,67 @@
 <section class="panel">
   <header class="panel-header">
     <div>
-      <h3>Daily plan</h3>
-      <p class="muted">Generate weight room guidance tied to throw progress.</p>
+      <h3>Weight room</h3>
+      <p class="muted">Plan, log, and review strength work alongside throws.</p>
     </div>
   </header>
-  <form id="dailyPlanForm" class="stack-form">
-    <div class="form-grid">
-      <label>
-        <span>Athlete</span>
-        <div class="athlete-select-wrapper" data-athlete-select-wrapper>
-          <select name="athlete" id="dailyPlanAthlete" data-logged-athlete-select>
-            <option value="">Select athlete</option>
-          </select>
-          <input class="athlete-custom-input" type="text" placeholder="Add new athlete" data-logged-athlete-input />
-        </div>
-      </label>
-    </div>
-    <button type="submit" class="primary">Build plan</button>
-  </form>
-  <div id="dailyPlan" class="muted">No plan available yet.</div>
-</section>
+  {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+  <div class="panel-note muted small">Demo plans/logs are shown for preview. They will be cleared when you log your own strength work.</div>
+  {% endif %}
 
-<section class="panel">
-  <header class="panel-header">
-    <div>
-      <h3>Quick log</h3>
-      <p class="muted">Log the sets from today’s plan without retyping names.</p>
+  <div class="metrics-grid compact">
+    <article class="metric-card">
+      <p class="metric-label">Strength sessions</p>
+      <div class="metric-value">--</div>
+      <p class="metric-sub">Logged this block</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Total sets</p>
+      <div class="metric-value">--</div>
+      <p class="metric-sub">Across recorded lifts</p>
+    </article>
+    <article class="metric-card">
+      <p class="metric-label">Primary lift</p>
+      <div class="metric-value">--</div>
+      <p class="metric-sub">Most logged exercise</p>
+    </article>
+  </div>
+
+  <div class="split-grid">
+    <div class="subpanel">
+      <header class="panel-header">
+        <div>
+          <h4>Daily plan</h4>
+          <p class="muted">Generate guidance tied to throw progress.</p>
+        </div>
+      </header>
+      <form id="dailyPlanForm" class="stack-form">
+        <div class="form-grid">
+          <label class="full">
+            <span>Athlete</span>
+            <div class="athlete-select-wrapper" data-athlete-select-wrapper>
+              <select name="athlete" id="dailyPlanAthlete" data-logged-athlete-select>
+                <option value="">Select athlete</option>
+              </select>
+              <input class="athlete-custom-input" type="text" placeholder="Add new athlete" data-logged-athlete-input />
+            </div>
+          </label>
+        </div>
+        <button type="submit" class="btn btn-primary">Build plan</button>
+      </form>
+      <div id="dailyPlan" class="muted panel-note">No plan available yet.</div>
     </div>
-  </header>
-  <div id="dailyPlanLogPanel" class="muted">Generate a plan to unlock quick logging.</div>
+
+    <div class="subpanel">
+      <header class="panel-header">
+        <div>
+          <h4>Quick log</h4>
+          <p class="muted">Log the sets from today’s plan without retyping names.</p>
+        </div>
+      </header>
+      <div id="dailyPlanLogPanel" class="muted panel-note">Generate a plan to unlock quick logging.</div>
+    </div>
+  </div>
 </section>
 
 <section class="panel">
@@ -74,8 +106,40 @@
         <input type="text" name="notes" placeholder="RPE, tempo, cues" />
       </label>
     </div>
-    <button type="submit" class="primary">Log set</button>
-    <p class="muted small" id="weightRoomLiftStatus">Ready</p>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Log set</button>
+      <p class="muted small" id="weightRoomLiftStatus">Ready</p>
+    </div>
   </form>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Recent strength sessions</h3>
+      <p class="muted">Track load and density across the weight room.</p>
+    </div>
+    <label class="input-label">
+      Athlete
+      <select id="strengthFilter"></select>
+    </label>
+  </header>
+  <div class="table-wrapper">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Athlete</th>
+          <th>Lift</th>
+          <th>Sets × reps</th>
+          <th>Load</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody id="strengthTable">
+        <tr><td colspan="6">No workout sets recorded yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 {% endblock %}

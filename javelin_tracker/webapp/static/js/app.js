@@ -11,6 +11,9 @@ const state = {
   forecast: null,
   strengthLogs: [],
   strengthFilter: 'all',
+  lastReport: null,
+  teams: [],
+  teamFilter: 'all',
 };
 
 const page = document.body.dataset.page || null;
@@ -23,6 +26,7 @@ const controllers = {
   throwai: initTraining,
   weightroom: initWeightRoom,
   reports: initReports,
+  quickstart: () => {},
 };
 
 async function ensureAthletes(force = false) {
@@ -39,6 +43,24 @@ async function ensureAthletes(force = false) {
   } catch (error) {
     console.error(error);
     showToast('Unable to load athletes.');
+    return [];
+  }
+}
+
+async function ensureTeams(force = false) {
+  if (!force && state.teams.length) {
+    populateTeamFields();
+    return state.teams;
+  }
+  try {
+    const response = await fetch('/api/teams');
+    const data = await response.json();
+    state.teams = data.teams || [];
+    populateTeamFields();
+    return state.teams;
+  } catch (error) {
+    console.error(error);
+    showToast('Unable to load teams.');
     return [];
   }
 }
@@ -64,15 +86,22 @@ function renderAthletesTable() {
   if (!tbody) {
     return;
   }
-  if (!state.athletes.length) {
-    tbody.innerHTML = '<tr><td colspan="6">No athletes in the database yet.</td></tr>';
+  const rows = state.athletes.filter((athlete) => {
+    if (state.teamFilter && state.teamFilter !== 'all') {
+      return (athlete.team || 'Unassigned').toLowerCase() === state.teamFilter.toLowerCase();
+    }
+    return true;
+  });
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7">No athletes yet — add one to start logging sessions.</td></tr>';
     return;
   }
-  tbody.innerHTML = state.athletes
+  tbody.innerHTML = rows
     .map(
       (athlete) => `
         <tr data-athlete-id="${athlete.id}">
           <td>${athlete.name}</td>
+          <td>${athlete.team || 'Unassigned'}</td>
           <td>${athlete.height_cm ?? '—'}</td>
           <td>${athlete.weight_kg ?? '—'}</td>
           <td>${athlete.bmi != null ? formatNumber(athlete.bmi, 1) : '—'}</td>
@@ -121,12 +150,18 @@ function fillAthleteForm(athlete) {
   const benchField = document.getElementById('athleteBench');
   const squatField = document.getElementById('athleteSquat');
   const notesField = document.getElementById('athleteNotes');
+  const teamField = document.getElementById('athleteTeam');
   if (!idField) {
     return;
   }
   idField.value = athlete.id;
   if (selectField) {
     selectField.value = String(athlete.id);
+  }
+  if (teamField) {
+    const match = state.teams.find((team) => team.id === athlete.team_id) || null;
+    const value = match ? match.id : athlete.team_id;
+    teamField.value = value || '';
   }
   if (heightField) heightField.value = athlete.height_cm ?? '';
   if (weightField) weightField.value = athlete.weight_kg ?? '';
@@ -142,6 +177,7 @@ async function saveAthleteProfile(formData) {
     showToast('Select an athlete first.');
     return;
   }
+  clearFieldErrors(document.getElementById('athleteForm'));
   const payload = Object.fromEntries(formData.entries());
   try {
     const response = await fetch(`/api/athletes/${id}/profile`, {
@@ -164,10 +200,10 @@ async function saveAthleteProfile(formData) {
     renderAthletesTable();
     fillAthleteForm(updated);
     populateAthleteFields();
-    showToast('Athlete profile updated.');
+    showToast('Athlete profile updated.', 'success');
   } catch (error) {
     console.error(error);
-    showToast(error.message || 'Unable to save profile.');
+    showToast(error.message || 'Unable to save profile.', 'error');
   }
 }
 
@@ -220,6 +256,14 @@ function bindCommonInteractions() {
     });
   }
 
+  document.querySelectorAll('[data-team-filter]').forEach((filter) => {
+    filter.addEventListener('change', () => {
+      state.teamFilter = filter.value || 'all';
+      renderSessionsTable();
+      renderTimeline();
+    });
+  });
+
   const strengthFilter = document.getElementById('strengthFilter');
   if (strengthFilter) {
     strengthFilter.addEventListener('change', () => {
@@ -234,10 +278,26 @@ function bindCommonInteractions() {
       event.preventDefault();
       const payload = Object.fromEntries(buildFormDataWithAthlete(form).entries());
       if (!payload.event) {
-        showToast('Event is required to log a session.');
+        showToast('Event is required to log a session.', 'error');
         return;
       }
       setFormStatus('Saving...');
+      const mode = event.submitter?.dataset?.mode || 'stay';
+      const submitButton = event.submitter;
+      if (submitButton) {
+        submitButton.disabled = true;
+        const originalText = submitButton.textContent;
+        submitButton.dataset.originalText = originalText;
+        submitButton.textContent = 'Saving...';
+      }
+      if (!validateSessionForm(form, payload)) {
+        setFormStatus('Fix the highlighted fields');
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.textContent = submitButton.dataset.originalText || 'Save';
+        }
+        return;
+      }
       try {
         const response = await fetch('/api/sessions', {
           method: 'POST',
@@ -248,14 +308,39 @@ function bindCommonInteractions() {
         if (!response.ok) {
           throw new Error(data.error || 'Unable to save session.');
         }
-        form.reset();
-        showToast('Session saved and analytics refreshed.');
+        const teamField = form.querySelector('select[name="team"]');
+        const eventField = form.querySelector('input[name="event"]');
+        if (teamField) {
+          localStorage.setItem('lastTeam', teamField.value || '');
+        }
+        if (eventField) {
+          localStorage.setItem('lastEvent', eventField.value || '');
+        }
+        if (mode === 'new') {
+          const keep = {
+            date: form.querySelector('input[name="date"]')?.value || '',
+            team: teamField?.value || '',
+            event: eventField?.value || '',
+          };
+          form.reset();
+          if (keep.date) form.querySelector('input[name="date"]')?.setAttribute('value', keep.date);
+          if (teamField && keep.team) teamField.value = keep.team;
+          if (eventField && keep.event) eventField.value = keep.event;
+          prefillWeekday(new Date().getDay());
+          focusFirstField(form);
+        } else {
+          showToast('Session saved and analytics refreshed.', 'success');
+        }
         await Promise.all([loadSummary(), loadSessions()]);
       } catch (error) {
         console.error(error);
-        showToast(error.message || 'An unexpected error occurred.');
+        showToast(error.message || 'An unexpected error occurred.', 'error');
       } finally {
         setFormStatus('Ready');
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.textContent = submitButton.dataset.originalText || 'Save';
+        }
       }
     });
   }
@@ -306,6 +391,28 @@ function bindCommonInteractions() {
     }
   });
 
+  // Lightweight tooltip toggles for info-tip elements
+  const tipTargets = document.querySelectorAll('.info-tip');
+  tipTargets.forEach((tip) => {
+    tip.setAttribute('tabindex', '0');
+    tip.addEventListener('click', () => {
+      const isOpen = tip.dataset.open === 'true';
+      document.querySelectorAll('.info-tip[data-open="true"]').forEach((el) => (el.dataset.open = 'false'));
+      tip.dataset.open = isOpen ? 'false' : 'true';
+    });
+    tip.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        tip.click();
+      }
+    });
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.info-tip')) {
+      document.querySelectorAll('.info-tip[data-open="true"]').forEach((el) => (el.dataset.open = 'false'));
+    }
+  });
+
   document.querySelectorAll('[data-nav]').forEach((element) => {
     element.addEventListener('click', () => {
       const target = element.dataset.nav;
@@ -314,6 +421,16 @@ function bindCommonInteractions() {
       }
     });
   });
+
+  const filterToggle = document.getElementById('filterToggle');
+  if (filterToggle) {
+    const bar = document.querySelector('.filter-bar.collapsible');
+    filterToggle.addEventListener('click', () => {
+      if (bar) {
+        bar.classList.toggle('is-open');
+      }
+    });
+  }
 
   const dailyPlanForm = document.getElementById('dailyPlanForm');
   if (dailyPlanForm) {
@@ -337,32 +454,119 @@ function bindCommonInteractions() {
       await requestForecast(new FormData(forecastForm));
     });
   }
+
+  const templateSelect = document.getElementById('sessionTemplate');
+  if (templateSelect) {
+    templateSelect.addEventListener('change', () => applySessionTemplate(templateSelect.value));
+  }
+  document.querySelectorAll('[data-template]').forEach((button) => {
+    button.addEventListener('click', () => applySessionTemplate(button.dataset.template));
+  });
+  const openTemplate = document.getElementById('openTemplateSelect');
+  if (openTemplate && templateSelect) {
+    openTemplate.addEventListener('click', () => {
+      templateSelect.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      templateSelect.focus();
+    });
+  }
+  const duplicateBtn = document.getElementById('duplicateSession');
+  if (duplicateBtn) {
+    duplicateBtn.addEventListener('click', () => duplicateLastSession());
+  }
+  const quickAddBtn = document.getElementById('quickAddSession');
+  if (quickAddBtn) {
+    quickAddBtn.addEventListener('click', () => prefillWeekday(new Date().getDay()));
+  }
+  const prefillMonday = document.getElementById('prefillMonday');
+  if (prefillMonday) {
+    prefillMonday.addEventListener('click', () => prefillWeekday(1));
+  }
+  const reportDownload = document.getElementById('reportDownload');
+  if (reportDownload) {
+    reportDownload.addEventListener('click', () => handleReportAction('download'));
+  }
+  const reportEmail = document.getElementById('reportEmail');
+  if (reportEmail) {
+    reportEmail.addEventListener('click', () => handleReportAction('email'));
+  }
+
+  const rosterImportForm = document.getElementById('rosterImportForm');
+  if (rosterImportForm) {
+    rosterImportForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      await importCsv(rosterImportForm, '/api/import/roster', 'rosterImportStatus');
+    });
+  }
+  const sessionImportForm = document.getElementById('sessionImportForm');
+  if (sessionImportForm) {
+    sessionImportForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      await importCsv(sessionImportForm, '/api/import/sessions', 'sessionImportStatus');
+      await loadSessions();
+    });
+  }
+
+  const teamForm = document.getElementById('teamForm');
+  if (teamForm) {
+    teamForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const formData = new FormData(teamForm);
+      const name = formData.get('name');
+      if (!name) return;
+      try {
+        const response = await fetch('/api/teams', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Unable to create team.');
+        }
+        showToast(`Created team ${name}.`);
+        teamForm.reset();
+        await ensureTeams(true);
+      } catch (error) {
+        showToast(error.message || 'Unable to create team.');
+      }
+    });
+  }
 }
 
 async function initDashboard() {
-  await Promise.all([loadSummary(), loadSessions()]);
+  await Promise.all([loadSummary(), loadSessions(), ensureTeams()]);
+  initOnboardingTour();
 }
 
 async function initSessions() {
-  await Promise.all([loadSessions(), ensureAthletes()]);
+  await Promise.all([loadSessions(), ensureAthletes(), ensureTeams()]);
+  const dateInput = document.querySelector('#sessionForm input[name="date"]');
+  if (dateInput && !dateInput.value) {
+    const today = new Date();
+    dateInput.value = formatInputDate(today);
+  }
+  applyLastSelections();
+  focusFirstField(document.getElementById('sessionForm'));
 }
 
 async function initLogs() {
-  await Promise.all([loadSessions(), loadStrengthLogs(), ensureAthletes()]);
+  await Promise.all([loadSummary(), loadSessions(), loadStrengthLogs(), ensureAthletes(), ensureTeams()]);
   renderStrengthLogs();
 }
 
 async function initAnalytics() {
-  await Promise.all([loadSummary(), loadSessions(), ensureAthletes()]);
+  await Promise.all([loadSummary(), loadSessions(), ensureAthletes(), ensureTeams()]);
   await refreshCliSummary();
 }
 
 async function initTraining() {
-  await Promise.all([loadSummary(), loadSessions(), ensureAthletes()]);
+  await Promise.all([loadSummary(), loadSessions(), ensureAthletes(), ensureTeams()]);
 }
 
 async function initReports() {
-  await Promise.all([loadSummary(), refreshCliSummary(), ensureAthletes()]);
+  await Promise.all([loadSummary(), refreshCliSummary(), ensureAthletes(), ensureTeams()]);
+  prefillReportFormDefaults();
+  updateLastReportCard();
   const form = document.getElementById('weeklyReportForm');
   if (form) {
     form.addEventListener('submit', async (event) => {
@@ -373,7 +577,7 @@ async function initReports() {
 }
 
 async function initWeightRoom() {
-  await Promise.all([ensureAthletes(), loadSessions()]);
+  await Promise.all([ensureAthletes(), loadSessions(), loadStrengthLogs(), ensureTeams()]);
 }
 
 async function initAthletes() {
@@ -391,6 +595,7 @@ async function initAthletes() {
   if (form) {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
+      clearFieldErrors(form);
       await saveAthleteProfile(new FormData(form));
     });
   }
@@ -435,6 +640,7 @@ async function loadSessions() {
     renderTrainingTimeline();
     renderTagFocus();
     populateLoggedAthleteSelects();
+    renderWeekPlanner();
   } catch (error) {
     console.error(error);
     showToast('Unable to load sessions.');
@@ -514,6 +720,7 @@ function renderStats() {
     heroLoad.textContent = `${formatNumber(totals.load, 1)} AU`;
   }
   renderReadinessSummary();
+  updateLoadRiskBanner();
 }
 
 function renderChart() {
@@ -547,27 +754,29 @@ function renderChart() {
         {
           label: 'Mean best',
           data: mean,
-          borderColor: '#64f2ff',
-          backgroundColor: 'rgba(100, 242, 255, 0.2)',
-          tension: 0.4,
-          borderWidth: 2,
-        },
-        {
-          label: 'Median best',
+          borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59, 130, 246, 0.15)',
+      tension: 0.4,
+      borderWidth: 2,
+      yAxisID: 'distance',
+    },
+    {
+      label: 'Median best',
           data: median,
-          borderColor: '#ff7ed4',
-          backgroundColor: 'rgba(255, 126, 212, 0.15)',
+          borderColor: '#22c55e',
+          backgroundColor: 'rgba(34, 197, 94, 0.18)',
           tension: 0.4,
-          borderDash: [6, 6],
-          borderWidth: 2,
-        },
-        {
-          label: 'Throw volume',
-          data: volume,
-          type: 'bar',
-          backgroundColor: 'rgba(109, 229, 154, 0.25)',
-          borderColor: '#6de59a',
-          yAxisID: 'volume',
+      borderDash: [6, 6],
+      borderWidth: 2,
+      yAxisID: 'distance',
+    },
+    {
+      label: 'Throw volume (count)',
+      data: volume,
+      type: 'bar',
+      backgroundColor: 'rgba(249, 115, 22, 0.2)',
+      borderColor: '#f97316',
+      yAxisID: 'volume',
         },
       ],
     },
@@ -576,15 +785,26 @@ function renderChart() {
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       scales: {
-        y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.08)' }, ticks: { color: '#aab2cc' } },
-        volume: { beginAtZero: true, position: 'right', grid: { display: false }, ticks: { color: '#aab2cc' } },
-        x: { grid: { display: false }, ticks: { color: '#aab2cc' } },
+        distance: {
+          beginAtZero: true,
+          grid: { color: 'rgba(15,23,42,0.08)' },
+          ticks: { color: '#475569' },
+          title: { display: true, text: 'Best distance (m)', color: '#475569' },
+        },
+        volume: {
+          beginAtZero: true,
+          position: 'right',
+          grid: { display: false },
+          ticks: { color: '#475569' },
+          title: { display: true, text: 'Throw volume (count)', color: '#475569' },
+        },
+        x: { grid: { display: false }, ticks: { color: '#475569' } },
       },
       plugins: {
         legend: { display: false },
         tooltip: {
-          backgroundColor: 'rgba(5,7,13,0.9)',
-          borderColor: 'rgba(255,255,255,0.1)',
+          backgroundColor: 'rgba(15,23,42,0.92)',
+          borderColor: 'rgba(0,0,0,0.08)',
           borderWidth: 1,
         },
       },
@@ -593,20 +813,30 @@ function renderChart() {
 }
 
 function renderSummaryTable() {
-  const table = document.getElementById('summaryTable');
-  if (!state.summary || !table) {
+  if (!state.summary) {
     return;
   }
+  const table = document.getElementById('summaryTable');
   const rows =
     state.summaryTab === 'all'
       ? state.summary.summary?.rollupRows
       : state.summary.summary?.rows;
+  const heroAlerts = document.getElementById('heroAlerts');
+  const riskTile = document.getElementById('riskAlertCount');
+  const riskCount = rows && rows.length ? rows.filter((row) => row.risk).length : 0;
+  if (heroAlerts) {
+    heroAlerts.textContent = riskCount;
+  }
+  if (riskTile) {
+    riskTile.textContent = riskCount;
+  }
+  if (!table) {
+    updateLoadRiskBanner();
+    return;
+  }
   if (!rows || rows.length === 0) {
-    table.innerHTML = `<tr><td colspan="10">No sessions logged yet.</td></tr>`;
-    const heroAlerts = document.getElementById('heroAlerts');
-    if (heroAlerts) {
-      heroAlerts.textContent = '0';
-    }
+    table.innerHTML = `<tr><td colspan="12">No sessions logged yet.</td></tr>`;
+    updateLoadRiskBanner();
     return;
   }
   const formatter = (value, suffix = '') => {
@@ -627,15 +857,14 @@ function renderSummaryTable() {
           <td>${formatter(row.load, ' AU')}</td>
           <td>${row.throws}</td>
           <td>${formatter(row.acwrRolling)}</td>
+          <td>${formatNumber(row.monotony, 2)}</td>
+          <td>${formatNumber(row.strain, 0)}</td>
           <td>${riskBadge}</td>
         </tr>
       `;
     })
     .join('');
-  const heroAlerts = document.getElementById('heroAlerts');
-  if (heroAlerts) {
-    heroAlerts.textContent = rows.filter((row) => row.risk).length;
-  }
+  updateLoadRiskBanner();
 }
 
 function renderPersonalBests(targetId = 'pbList') {
@@ -743,6 +972,37 @@ function populateLoggedAthleteSelects() {
   });
 }
 
+function populateTeamFields() {
+  const optionsByName = {
+    default: ['<option value="all">All teams</option>', '<option value="">Unassigned</option>'],
+    session: ['<option value="Unassigned">Unassigned</option>'],
+    teamId: ['<option value="">Unassigned</option>'],
+  };
+  state.teams.forEach((team) => {
+    optionsByName.default.push(`<option value="${team.name}">${team.name}</option>`);
+    optionsByName.session.push(`<option value="${team.name}">${team.name}</option>`);
+    optionsByName.teamId.push(`<option value="${team.id}">${team.name}</option>`);
+  });
+
+  document.querySelectorAll('[data-team-select]').forEach((select) => {
+    const current = select.value;
+    let opts = optionsByName.default;
+    if (select.name === 'team') {
+      opts = optionsByName.session;
+    } else if (select.name === 'team_id') {
+      opts = optionsByName.teamId;
+    }
+    select.innerHTML = opts.join('');
+    if (current) {
+      select.value = current;
+    }
+  });
+  document.querySelectorAll('[data-team-filter]').forEach((filter) => {
+    filter.innerHTML = optionsByName.default.join('');
+    filter.value = state.teamFilter || 'all';
+  });
+}
+
 function renderTimeline(targetId = 'sessionTimeline', limit = 12) {
   const container = document.getElementById(targetId);
   if (!container) {
@@ -754,6 +1014,12 @@ function renderTimeline(targetId = 'sessionTimeline', limit = 12) {
         return true;
       }
       return (session.event || '').toLowerCase() === state.timelineFilter;
+    })
+    .filter((session) => {
+      if (state.teamFilter && state.teamFilter !== 'all') {
+        return (session.team || 'Unassigned').toLowerCase() === state.teamFilter.toLowerCase();
+      }
+      return true;
     })
     .slice(0, limit);
   if (sessions.length === 0) {
@@ -799,11 +1065,23 @@ function renderSessionsTable() {
   const query = state.searchQuery;
   const rows = state.sessions
     .filter((session) => {
+      if (state.timelineFilter !== 'all') {
+        return (session.event || '').toLowerCase() === state.timelineFilter;
+      }
+      return true;
+    })
+    .filter((session) => {
+      if (state.teamFilter && state.teamFilter !== 'all') {
+        return (session.team || 'Unassigned').toLowerCase() === state.teamFilter.toLowerCase();
+      }
+      return true;
+    })
+    .filter((session) => {
       if (!query) {
         return true;
       }
       const haystack = (
-        `${session.date} ${session.athlete} ${session.event} ${(session.tags || []).join(' ')}`
+        `${session.date} ${session.athlete} ${session.event} ${(session.tags || []).join(' ')} ${session.team || ''}`
       ).toLowerCase();
       return haystack.includes(query);
     })
@@ -811,24 +1089,212 @@ function renderSessionsTable() {
       const actionCell = deletable
         ? `<td><button class="table-action" data-delete-session="${session.id}">Delete</button></td>`
         : '';
+      const tags = (session.tags || []).join(', ');
+      const volume = session.throws?.length || 0;
+      const rpe = session.rpe ?? '—';
       return `
         <tr>
-          <td>${session.date}</td>
-          <td>${session.athlete || '—'}</td>
-          <td>${session.event || '—'}</td>
-          <td>${formatNumber(session.best)} m</td>
-          <td>${session.throws?.length || 0}</td>
-          <td>${formatNumber(session.load, 1)} AU</td>
+          <td data-label="Date">${session.date}</td>
+          <td data-label="Athlete">${session.athlete || '—'}</td>
+          <td data-label="Team">${session.team || 'Unassigned'}</td>
+          <td data-label="Event">${session.event || '—'}</td>
+          <td data-label="Best">${formatNumber(session.best)} m</td>
+          <td data-label="Volume">${volume}</td>
+          <td data-label="RPE">${rpe}</td>
+          <td data-label="Tags">${tags || '—'}</td>
+          <td data-label="Load">${formatNumber(session.load, 1)} AU</td>
           ${actionCell}
         </tr>
       `;
     });
   if (!rows.length) {
-    const span = deletable ? 7 : 6;
+    const span = deletable ? 10 : 9;
     table.innerHTML = `<tr><td colspan="${span}">No sessions match your search.</td></tr>`;
   } else {
     table.innerHTML = rows.join('');
   }
+}
+
+function getWeekDates(date = new Date()) {
+  const today = new Date(date);
+  const day = today.getDay();
+  const diff = day === 0 ? -6 : 1 - day; // Monday start
+  const monday = new Date(today);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(today.getDate() + diff);
+  return Array.from({ length: 7 }, (_, index) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + index);
+    return d;
+  });
+}
+
+function formatInputDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function renderWeekPlanner() {
+  const strip = document.getElementById('weekPlanner');
+  if (!strip) return;
+  const dates = getWeekDates();
+  const weekKeys = new Set(dates.map((d) => formatInputDate(d)));
+  const sessionsByDay = new Set();
+  state.sessions.forEach((session) => {
+    if (!session.date) return;
+    const date = new Date(session.date);
+    if (Number.isNaN(date.getTime())) return;
+    const key = formatInputDate(date);
+    if (weekKeys.has(key)) {
+      sessionsByDay.add(key);
+    }
+  });
+  strip.querySelectorAll('.week-day').forEach((button) => {
+    const weekday = Number(button.dataset.weekday);
+    const dateForDay = dates.find((d) => d.getDay() === weekday);
+    const dateLabel = button.querySelector('.week-date');
+    if (dateForDay && dateLabel) {
+      dateLabel.textContent = dateForDay.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      button.dataset.dateValue = formatInputDate(dateForDay);
+      const hasSession = sessionsByDay.has(button.dataset.dateValue);
+      button.classList.toggle('has-session', hasSession);
+    }
+    button.onclick = () => prefillWeekday(weekday);
+  });
+  updateSessionsEmptyState(sessionsByDay.size > 0);
+}
+
+function prefillWeekday(weekday) {
+  const dates = getWeekDates();
+  const target = dates.find((d) => d.getDay() === weekday);
+  const dateInput = document.querySelector('#sessionForm input[name="date"]');
+  if (target && dateInput) {
+    dateInput.value = formatInputDate(target);
+    dateInput.focus();
+  }
+}
+
+function applyLastSelections() {
+  const teamField = document.querySelector('#sessionForm select[name="team"]');
+  const eventField = document.querySelector('#sessionForm input[name="event"]');
+  if (teamField) {
+    const lastTeam = localStorage.getItem('lastTeam');
+    if (lastTeam) {
+      teamField.value = lastTeam;
+    }
+  }
+  if (eventField) {
+    const lastEvent = localStorage.getItem('lastEvent');
+    if (lastEvent) {
+      eventField.value = lastEvent;
+    }
+  }
+  const rpeField = document.querySelector('#sessionForm input[name="rpe"]');
+  if (rpeField && !rpeField.value) {
+    rpeField.value = '7';
+  }
+}
+
+function updateSessionsEmptyState(hasSessionsThisWeek) {
+  const empty = document.getElementById('sessionsEmptyState');
+  if (!empty) return;
+  empty.style.display = hasSessionsThisWeek ? 'none' : 'flex';
+}
+
+function applySessionTemplate(template) {
+  if (!template) return;
+  const best = document.querySelector('input[name="best"]');
+  const throwsField = document.querySelector('input[name="throws"]');
+  const rpe = document.querySelector('input[name="rpe"]');
+  const duration = document.querySelector('input[name="duration_minutes"]');
+  const tags = document.querySelector('input[name="tags"]');
+  const notes = document.querySelector('textarea[name="notes"]');
+  const technique = document.querySelector('input[name="technique"]');
+  const presets = {
+    tech: {
+      rpe: '5',
+      duration: '45',
+      tags: 'technique, drills',
+      notes: 'Technical focus: positions, rhythm, light intensity.',
+      technique: 'Technical session',
+    },
+    heavy: {
+      rpe: '8',
+      duration: '75',
+      tags: 'strength, heavy throws',
+      notes: 'Heavy implements, lower volume. Track readiness.',
+      technique: 'Heavy throws',
+    },
+    comp: {
+      rpe: '9',
+      duration: '90',
+      tags: 'competition, meet',
+      notes: 'Meet day. Capture conditions and best marks.',
+      technique: 'Competition',
+    },
+  };
+  if (template === 'last') {
+    duplicateLastSession();
+    return;
+  }
+  if (template === 'clear') {
+    [best, throwsField, rpe, duration, tags, notes, technique].forEach((field) => field && (field.value = ''));
+    return;
+  }
+  const preset = presets[template];
+  if (!preset) return;
+  rpe && (rpe.value = preset.rpe);
+  duration && (duration.value = preset.duration);
+  tags && (tags.value = preset.tags);
+  notes && (notes.value = preset.notes);
+  technique && (technique.value = preset.technique);
+  if (best && !best.value) {
+    best.focus();
+  }
+}
+
+function duplicateLastSession() {
+  if (!state.sessions.length) {
+    showToast('No previous sessions to duplicate.');
+    return;
+  }
+  const sorted = [...state.sessions].sort((a, b) => {
+    const aDate = new Date(a.date || 0).getTime();
+    const bDate = new Date(b.date || 0).getTime();
+    return bDate - aDate;
+  });
+  const session = sorted[0];
+  const form = document.getElementById('sessionForm');
+  if (!form) return;
+  const map = {
+    athlete: session.athlete || '',
+    event: session.event || '',
+    date: session.date ? session.date.split('T')[0] : '',
+    best: session.best ?? '',
+    throws: Array.isArray(session.throws) ? session.throws.join(', ') : session.throws ?? '',
+    rpe: session.rpe ?? '',
+    duration_minutes: session.duration_minutes ?? '',
+    team: session.team ?? '',
+    implement_weight_kg: session.implement_weight_kg ?? '',
+    technique: session.technique ?? '',
+    fouls: session.fouls ?? '',
+    tags: session.tags ? session.tags.join(', ') : '',
+    notes: session.notes ?? '',
+  };
+  Object.entries(map).forEach(([name, value]) => {
+    const field = form.querySelector(`[name="${name}"]`);
+    if (field) {
+      field.value = value;
+    }
+  });
+  const select = form.querySelector('[data-logged-athlete-select]');
+  if (select) {
+    select.value = map.athlete;
+    toggleLoggedAthleteInput(select);
+  }
+  showToast('Duplicated last session—review and save.');
 }
 
 function updateHeroHighlights() {
@@ -865,9 +1331,17 @@ function renderTrainingIntel() {
       const avgLoad = totals.load / totals.sessions;
       const avgRpe = totals.averageRpe != null ? formatNumber(totals.averageRpe, 1) : '—';
       const pb = state.summary.personalBest;
+      const latestRow =
+        state.summary.summary?.rows && state.summary.summary.rows.length
+          ? state.summary.summary.rows[state.summary.summary.rows.length - 1]
+          : null;
+      const acwr = latestRow ? formatNumber(latestRow.acwrRolling) : '—';
+      const monotony = latestRow ? formatNumber(latestRow.monotony, 2) : '—';
+      const strain = latestRow ? formatNumber(latestRow.strain, 0) : '—';
       readinessBoard.innerHTML = `
         <p><strong>${formatNumber(totals.load, 1)} AU</strong> total load this window</p>
         <p><strong>${formatNumber(avgLoad, 1)} AU</strong> average load / session · <strong>Avg RPE ${avgRpe}</strong></p>
+        <p>ACWR ${acwr} · Monotony ${monotony} · Strain ${strain}</p>
         <p>${pb ? `Latest PB ${pb.date} at ${formatNumber(pb.best)} m.` : 'No PB logged in this window yet.'}</p>
       `;
     }
@@ -916,9 +1390,12 @@ async function refreshCliSummary() {
   }
 }
 
-function showToast(message) {
+function showToast(message, type = 'info') {
   const toast = document.getElementById('appToast');
   if (!toast) return;
+  toast.classList.remove('success', 'error');
+  if (type === 'success') toast.classList.add('success');
+  if (type === 'error') toast.classList.add('error');
   toast.textContent = message;
   toast.classList.add('show');
   setTimeout(() => {
@@ -931,6 +1408,52 @@ function setFormStatus(text) {
   if (status) {
     status.textContent = text;
   }
+}
+
+function validateSessionForm(form, payload) {
+  clearFieldErrors(form);
+  const errors = [];
+  if (!payload.athlete) {
+    errors.push({ field: 'athlete', message: 'Athlete is required.' });
+  }
+  if (!payload.date) {
+    errors.push({ field: 'date', message: 'Date is required.' });
+  }
+  if (!payload.event) {
+    errors.push({ field: 'event', message: 'Event is required.' });
+  }
+  if (payload.rpe) {
+    const rpeValue = Number(payload.rpe);
+    if (Number.isNaN(rpeValue) || rpeValue < 1 || rpeValue > 10) {
+      errors.push({ field: 'rpe', message: 'Enter an RPE between 1 and 10.' });
+    }
+  }
+  if (!payload.rpe) {
+    errors.push({ field: 'rpe', message: 'RPE helps calculate load.' });
+  }
+  errors.forEach((error) => showFieldError(form, error.field, error.message));
+  if (errors.length) {
+    const first = form.querySelector(`[name="${errors[0].field}"]`);
+    first?.focus();
+    return false;
+  }
+  return true;
+}
+
+function showFieldError(form, fieldName, message) {
+  const target = form.querySelector(`[data-error-for="${fieldName}"]`);
+  const input = form.querySelector(`[name="${fieldName}"]`);
+  if (target) {
+    target.textContent = message;
+  }
+  if (input) {
+    input.classList.add('input-error');
+  }
+}
+
+function clearFieldErrors(form) {
+  form.querySelectorAll('.field-error').forEach((el) => (el.textContent = ''));
+  form.querySelectorAll('.input-error').forEach((el) => el.classList.remove('input-error'));
 }
 
 function toggleChartPlaceholder(show) {
@@ -980,65 +1503,27 @@ function renderStrengthLogs() {
     return (log.athlete || '').toLowerCase() === state.strengthFilter.toLowerCase();
   });
   if (!filtered.length) {
-    table.innerHTML = '<tr><td colspan="4">No workout sets recorded yet.</td></tr>';
+    table.innerHTML = '<tr><td colspan="6">No workout sets recorded yet.</td></tr>';
     return;
   }
 
-  const groups = {};
-  filtered.forEach((log) => {
-    const dateKey = (log.date?.split('T')[0] || log.date || '').split('T')[0];
-    const athlete = (log.athlete || '—').toString().trim();
-    const key = `${dateKey}::${athlete}`;
-    if (!groups[key]) {
-      groups[key] = { date: dateKey, athlete, sets: [] };
-    }
-    groups[key].sets.push(log);
-  });
-
-  const rows = Object.values(groups)
-    .sort((a, b) => (a.date < b.date ? 1 : -1))
-    .map((group, index) => {
-      const setCount = group.sets.length;
-      const summaryRow = `
-        <tr class="strength-group-row">
-          <td>${group.date}</td>
-          <td>${group.athlete}</td>
-          <td>${setCount}</td>
-          <td><button type="button" class="table-action" data-toggle-strength="${index}">View sets</button></td>
+  const rows = filtered
+    .sort((a, b) => ((a.date || '') < (b.date || '') ? 1 : -1))
+    .map((log) => {
+      const date = (log.date?.split('T')[0] || log.date || '').split('T')[0] || '—';
+      const sets = log.sets ?? 1;
+      const reps = log.reps ?? '—';
+      const volume = `${sets} × ${reps}`;
+      return `
+        <tr>
+          <td data-label="Date">${date}</td>
+          <td data-label="Athlete">${log.athlete || '—'}</td>
+          <td data-label="Lift">${log.exercise || '—'}</td>
+          <td data-label="Sets × reps">${volume}</td>
+          <td data-label="Load">${formatNumber(log.load_kg, 1)} kg</td>
+          <td data-label="Notes">${log.notes || '—'}</td>
         </tr>
       `;
-      const detailRows = group.sets
-        .map(
-          (log) => `
-            <tr>
-              <td>${log.exercise || '—'}</td>
-              <td>${formatNumber(log.load_kg, 1)} kg</td>
-              <td>${log.reps ?? '—'}</td>
-              <td>${log.notes || '—'}</td>
-            </tr>
-          `
-        )
-        .join('');
-      const detailRow = `
-        <tr class="strength-detail-row" data-strength-group="${index}">
-          <td colspan="4">
-            <table class="workout-table-inner">
-              <thead>
-                <tr>
-                  <th>Exercise</th>
-                  <th>Load</th>
-                  <th>Reps</th>
-                  <th>Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${detailRows}
-              </tbody>
-            </table>
-          </td>
-        </tr>
-      `;
-      return summaryRow + detailRow;
     });
 
   table.innerHTML = rows.join('');
@@ -1055,7 +1540,7 @@ function renderReadinessSummary() {
   }
   const totals = state.summary.summary?.totals;
   if (!totals || !totals.sessions) {
-    block.textContent = 'Log a few sessions to unlock readiness guidance.';
+    block.textContent = 'Not enough data to estimate readiness. Log 3 sessions this week.';
     return;
   }
   const avgLoad = totals.sessions ? totals.load / totals.sessions : 0;
@@ -1066,6 +1551,27 @@ function renderReadinessSummary() {
     <p><strong>${avgRpe}</strong> average RPE across the window</p>
     <p>${pb ? `Latest PB ${pb.date} at ${formatNumber(pb.best)} m.` : 'No PB logged in this window yet.'}</p>
   `;
+}
+
+function updateLoadRiskBanner() {
+  const loadEl = document.getElementById('bannerLoadValue');
+  const riskEl = document.getElementById('bannerRiskLevel');
+  if (!loadEl && !riskEl) {
+    return;
+  }
+  const heroLoad = document.getElementById('heroLoad') || document.getElementById('statLoad');
+  const heroAlerts = document.getElementById('heroAlerts') || document.getElementById('riskAlertCount');
+  const loadText = heroLoad ? heroLoad.textContent || '--' : '--';
+  const riskCount = heroAlerts ? Number(heroAlerts.textContent || 0) : 0;
+  let riskLevel = 'Low';
+  if (riskCount > 3) riskLevel = 'High';
+  else if (riskCount > 0) riskLevel = 'Medium';
+  if (loadEl) {
+    loadEl.textContent = loadText;
+  }
+  if (riskEl) {
+    riskEl.textContent = Number.isNaN(riskCount) ? riskLevel : `${riskLevel} (${riskCount})`;
+  }
 }
 
 async function deleteSession(sessionId) {
@@ -1388,6 +1894,13 @@ async function requestWeeklyReport(formData) {
     if (status) {
       status.textContent = message || 'Report generated.';
     }
+    state.lastReport = {
+      message: message || 'Report generated.',
+      athlete: payload.athlete || 'All athletes',
+      weekEnding: payload.week_ending || '',
+      timestamp: new Date().toISOString(),
+    };
+    updateLastReportCard();
     showToast(message || 'Report generated.');
   } catch (error) {
     console.error(error);
@@ -1397,41 +1910,260 @@ async function requestWeeklyReport(formData) {
   }
 }
 
+function prefillReportFormDefaults() {
+  const form = document.getElementById('weeklyReportForm');
+  if (!form) return;
+  const weekEnding = form.querySelector('input[name="week_ending"]');
+  if (weekEnding && !weekEnding.value) {
+    weekEnding.value = getUpcomingSunday();
+  }
+  const athleteSelect = form.querySelector('select[name="athlete"]');
+  if (athleteSelect && !athleteSelect.value) {
+    const first = Array.from(athleteSelect.options).find((opt) => opt.value);
+    if (first) {
+      athleteSelect.value = first.value;
+    }
+  }
+  const teamSelect = form.querySelector('select[name="team"]');
+  if (teamSelect && !teamSelect.value && state.teams.length === 1) {
+    teamSelect.value = state.teams[0].name;
+  }
+}
+
+function getUpcomingSunday(date = new Date()) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = (7 - day) % 7;
+  d.setDate(d.getDate() + diff);
+  return formatInputDate(d);
+}
+
+function updateLastReportCard() {
+  const cardRecipient = document.getElementById('reportRecipient');
+  const cardTime = document.getElementById('reportTimestamp');
+  if (!cardRecipient && !cardTime) return;
+  if (!state.lastReport) {
+    if (cardRecipient) {
+      cardRecipient.textContent = 'No reports yet.';
+    }
+    if (cardTime) {
+      cardTime.textContent = '';
+    }
+    return;
+  }
+  if (cardRecipient) {
+    cardRecipient.textContent = `${state.lastReport.athlete} · Week ending ${state.lastReport.weekEnding || '—'}`;
+  }
+  if (cardTime) {
+    const time = new Date(state.lastReport.timestamp || new Date());
+    cardTime.textContent = `Generated ${time.toLocaleString()}`;
+  }
+}
+
+function handleReportAction(type) {
+  if (!state.lastReport) {
+    showToast('Generate a report first.');
+    return;
+  }
+  const action = type === 'email' ? 'Emailing' : 'Downloading';
+  showToast(`${action} latest report: ${state.lastReport.message || ''}`);
+}
+
+function initOnboardingTour() {
+  const startPanel = document.getElementById('startHerePanel');
+  if (!startPanel || localStorage.getItem('coachTourDone') === '1') {
+    return;
+  }
+  const steps = [
+    {
+      title: 'Navigate your control center',
+      body: 'Use the sidebar to jump between Dashboard, Sessions, Analytics, and Reports.',
+      selector: '.sidebar__nav',
+    },
+    {
+      title: 'Log a session',
+      body: 'Head to Sessions to capture best throws, RPE, tags, and notes each day.',
+      selector: '#sessionForm',
+    },
+    {
+      title: 'See load & export reports',
+      body: 'Check Analytics for load/readiness and generate weekly PDFs from Reports.',
+      selector: '#load-readiness',
+    },
+  ].filter(Boolean);
+  if (!steps.length) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'onboarding-overlay';
+  overlay.innerHTML = `
+    <div class="onboarding-card">
+      <h4></h4>
+      <p class="muted"></p>
+      <div class="onboarding-actions">
+        <button class="btn btn-ghost" data-tour-skip>Skip</button>
+        <button class="btn btn-primary" data-tour-next>Next</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const title = overlay.querySelector('h4');
+  const body = overlay.querySelector('p');
+  const nextBtn = overlay.querySelector('[data-tour-next]');
+  const skipBtn = overlay.querySelector('[data-tour-skip]');
+  let index = 0;
+
+  function endTour() {
+    overlay.remove();
+    localStorage.setItem('coachTourDone', '1');
+  }
+
+  function renderStep() {
+    const step = steps[index];
+    if (!step) {
+      endTour();
+      return;
+    }
+    overlay.classList.add('active');
+    title.textContent = step.title;
+    body.textContent = step.body;
+    nextBtn.textContent = index === steps.length - 1 ? 'Finish' : 'Next';
+    const target = step.selector ? document.querySelector(step.selector) : null;
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  nextBtn?.addEventListener('click', () => {
+    index += 1;
+    if (index >= steps.length) {
+      endTour();
+    } else {
+      renderStep();
+    }
+  });
+
+  skipBtn?.addEventListener('click', () => endTour());
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) {
+      endTour();
+    }
+  });
+  renderStep();
+}
+
+async function importCsv(form, endpoint, statusId) {
+  const status = document.getElementById(statusId);
+  const fileInput = form.querySelector('input[type="file"]');
+  if (!fileInput || !fileInput.files.length) {
+    if (status) status.textContent = 'Select a CSV file first.';
+    return;
+  }
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  if (status) status.textContent = 'Uploading...';
+  try {
+    const response = await fetch(endpoint, { method: 'POST', body: formData });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Import failed.');
+    }
+    if (status) status.textContent = `Imported ${data.created || 0} rows. ${
+      data.errors?.length ? data.errors.length + ' errors' : 'No errors.'
+    }`;
+    showToast(status.textContent);
+  } catch (error) {
+    if (status) status.textContent = error.message || 'Import failed.';
+    showToast(error.message || 'Import failed.');
+  }
+}
+
 function renderForecast(resultSet, profile) {
   const output = document.getElementById('forecastOutput');
   if (!output) {
     return;
   }
   if (!resultSet || !resultSet.length) {
-    output.textContent = 'No forecast available yet.';
+    output.innerHTML = '<div class="muted">No forecast available yet.</div>';
     return;
   }
   const profileBlock = profile
     ? `
-    <div class="forecast-profile">
-      <h4>${profile.name}</h4>
-      <p>Height: ${profile.height_cm ?? '—'} cm · Weight: ${profile.weight_kg ?? '—'} kg · BMI: ${
+      <div class="forecast-profile">
+        <h4>${profile.name}</h4>
+        <p class="muted small">Height: ${profile.height_cm ?? '—'} cm · Weight: ${profile.weight_kg ?? '—'} kg · BMI: ${
         profile.bmi != null ? formatNumber(profile.bmi, 1) : '—'
       }</p>
-      <p>Bench 1RM: ${profile.bench_1rm_kg != null ? formatNumber(profile.bench_1rm_kg, 1) + ' kg' : '—'} ·
-         Squat 1RM: ${profile.squat_1rm_kg != null ? formatNumber(profile.squat_1rm_kg, 1) + ' kg' : '—'}</p>
-    </div>
-  `
+        <p class="muted small">Bench 1RM: ${
+          profile.bench_1rm_kg != null ? formatNumber(profile.bench_1rm_kg, 1) + ' kg' : '—'
+        } · Squat 1RM: ${profile.squat_1rm_kg != null ? formatNumber(profile.squat_1rm_kg, 1) + ' kg' : '—'}</p>
+      </div>
+    `
     : '';
+
   const sections = resultSet
     .map(({ metric, forecast }) => {
       const { model, trend, confidence, forecasts } = forecast || {};
-      const header = `<p><strong>${metric.replace('_', ' ').toUpperCase()}</strong> — Model: ${
-        model || 'n/a'
-      } • Trend: ${trend || 'n/a'} • RMSE: ${confidence ?? 'n/a'}</p>`;
+      const title = metric.replace('_', ' ').toUpperCase();
+      const insight = describeForecast(metric, forecast);
+      const summary = `
+        <div class="forecast-summary">
+          <span><strong>Model:</strong> ${model || 'n/a'}</span>
+          <span><strong>Trend:</strong> ${trend || 'n/a'}</span>
+          <span><strong>RMSE:</strong> ${confidence ?? 'n/a'}</span>
+        </div>
+        <p class="muted small">${insight}</p>
+      `;
       const rows =
         (forecasts || [])
           .map(([date, value]) => `<tr><td>${date}</td><td>${formatNumber(value)}</td></tr>`)
           .join('') || '<tr><td colspan="2">Insufficient data.</td></tr>';
-      return `${header}<table><thead><tr><th>Day</th><th>Forecast</th></tr></thead><tbody>${rows}</tbody></table>`;
+      return `
+        <div class="forecast-section">
+          <h5>${title}</h5>
+          ${summary}
+          <table class="forecast-table">
+            <thead><tr><th>Day</th><th>Forecast</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
     })
-    .join('<hr/>');
+    .join('');
   output.innerHTML = profileBlock + sections;
+}
+
+function describeForecast(metric, forecast) {
+  const points = (forecast?.forecasts || []).map(([, value]) => Number(value)).filter((v) => !Number.isNaN(v));
+  if (!points.length) {
+    return 'Not enough data to explain this forecast yet.';
+  }
+  const start = points[0];
+  const end = points[points.length - 1];
+  const change = end - start;
+  const direction = change > 0 ? 'uptrend' : change < 0 ? 'downtrend' : 'flat trend';
+  const pct = start !== 0 ? (change / Math.abs(start)) * 100 : 0;
+  const magnitude =
+    Math.abs(pct) < 5
+      ? 'minor shift'
+      : Math.abs(pct) < 15
+      ? 'moderate change'
+      : 'notable change';
+  const metricLabel = metric.replace('_', ' ');
+  const model = forecast?.model || 'n/a';
+  const rmse = forecast?.confidence ?? 'n/a';
+  const trendWord = direction === 'flat trend' ? 'stable pattern' : direction;
+  const rationale = [
+    `The model (${model}) projects a ${trendWord} for ${metricLabel} with a ${magnitude} (${formatNumber(change, 1)} absolute, ${formatNumber(
+      pct,
+      1
+    )}% over the horizon).`,
+    'This trajectory reflects recent volume and RPE trends: higher recent load typically sustains or lifts performance, while load reductions or elevated RPE with lower output can lead to plateaus or drops.',
+    'We collapse multiple same-day logs and tame single outliers, so the slope reflects consistent behaviour rather than one-off spikes.',
+    'Tags and notes influence the slope: consistent “technical” or “light” sessions often create gentler trends, while heavy/competition tags can steepen short-term changes.',
+    `Model confidence (RMSE ${rmse}) indicates how tightly the forecast follows your history; lower RMSE means tighter fit, higher RMSE means greater uncertainty—use coaching judgment when adjusting plans.`,
+    'If you see a downward bend, consider easing acute load and prioritizing quality throws; if upward, verify readiness to sustain intensity without overreaching.'
+  ];
+  return rationale.join(' ');
 }
   const selectField = document.getElementById('athleteSelect');
   if (selectField) {

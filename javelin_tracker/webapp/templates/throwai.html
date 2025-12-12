@@ -4,10 +4,13 @@
 <section class="panel">
   <header class="panel-header">
     <div>
-      <h3>ThrowAI intelligence</h3>
-      <p class="muted">Run multi-metric forecasts and keep athletes aligned.</p>
+      <h3>ThrowAI</h3>
+      <p class="muted">Experimental tools to forecast performance and surface coaching cues.</p>
     </div>
   </header>
+  {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+  <div class="panel-note muted small">Any sample insights shown here are demo-only and will be replaced once you log real data.</div>
+  {% endif %}
   <form id="forecastForm" class="stack-form">
     <div class="form-grid">
       <label>
@@ -21,9 +24,23 @@
         <input type="number" name="days" value="14" min="3" max="60" />
       </label>
     </div>
-    <button type="submit" class="primary">Run forecast</button>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Run forecast</button>
+      <p class="muted small">Forecasts combine PBs, recent load, and tags to shape guidance.</p>
+      <a class="muted small" href="{{ url_for('metrics_help') }}">How we calculate forecasts</a>
+    </div>
   </form>
-  <div id="forecastOutput" class="muted" aria-live="polite">Select an athlete to see forecasts.</div>
+  <div class="subpanel forecast-card">
+    <header class="panel-header">
+      <div>
+        <h4>Forecasts</h4>
+        <p class="muted small">Projected throws and load based on your athlete’s history and tags.</p>
+      </div>
+    </header>
+    <div id="forecastOutput" class="forecast-body" aria-live="polite">
+      <div class="muted">Select an athlete to see forecasts.</div>
+    </div>
+  </div>
 </section>
 
 <section class="panel">
@@ -35,26 +52,26 @@
   </header>
   <div class="summary-grid">
     <div>
-      <h4 class="muted">Signals</h4>
+      <p class="panel-label">Signals</p>
       <ul id="trainingIntelList" class="intel-list"></ul>
       <p class="muted small" id="intelRiskSummary"></p>
     </div>
     <div>
-      <h4 class="muted">Readiness board</h4>
+      <p class="panel-label">Readiness board</p>
       <div id="readinessBoard" class="intel-card muted">Need more data to gauge readiness.</div>
     </div>
     <div>
-      <h4 class="muted">PB focus</h4>
+      <p class="panel-label">PB focus</p>
       <ul id="pbList" class="intel-list"></ul>
       <p class="muted small" id="intelPbSummary"></p>
     </div>
     <div>
-      <h4 class="muted">Risk windows</h4>
+      <p class="panel-label">Risk windows</p>
       <ul id="trainingRiskList" class="intel-list"></ul>
       <p class="muted small">High-risk dates to manage ACWR.</p>
     </div>
     <div class="full">
-      <h4 class="muted">Readiness summary</h4>
+      <p class="panel-label">Readiness summary</p>
       <div id="intelReadiness" class="muted">Need more data to gauge readiness.</div>
     </div>
   </div>

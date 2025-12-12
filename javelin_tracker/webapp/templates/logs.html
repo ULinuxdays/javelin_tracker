@@ -1,48 +1,154 @@
 {% extends "app_base.html" %}
 
 {% block content %}
-<div class="logs-dual">
-  <section class="panel">
-    <header class="panel-header">
-      <div>
-        <h3>Sessions</h3>
-        <p class="muted">Recent throws with quick actions.</p>
-      </div>
-      <div class="chip-row">
-        <label class="muted small">Filter event
+<div class="mini-banner" id="loadRiskBanner">
+  <div class="mini-banner__text">
+    <strong>Load today:</strong> <span id="bannerLoadValue">--</span> ·
+    <strong>Risk:</strong> <span id="bannerRiskLevel">--</span>
+  </div>
+  <a class="muted small" href="{{ url_for('analytics_page') }}#load-readiness" title="ACWR compares short-term load to chronic load to flag risk.">See why</a>
+</div>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Logs</h3>
+      <p class="muted">Throws and strength history in one command center view.</p>
+    </div>
+    <div class="tab-group" role="tablist">
+      <button class="chip is-active" data-log-tab="throws" role="tab" aria-selected="true">Throws log</button>
+      <button class="chip" data-log-tab="strength" role="tab" aria-selected="false">Strength log</button>
+    </div>
+  </header>
+
+  <div class="log-views">
+    <div class="log-view is-active" data-log-view="throws">
+      <button class="btn btn-ghost filter-toggle" id="filterToggle">Filters</button>
+      {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+      <div class="panel-note muted small">Demo data shown to preview how logs work. It will disappear as soon as you log a real session.</div>
+      {% endif %}
+      <div class="filter-bar collapsible">
+        <label class="input-label">
+          Event
           <select id="timelineFilter"></select>
         </label>
-        <input id="sessionsSearch" type="search" placeholder="Search athlete, event, tags" />
+        <label class="input-label">
+          Team
+          <select id="teamFilter">
+            <option value="all">All teams</option>
+          </select>
+        </label>
+        <label class="input-label flex-1">
+          Search
+          <input id="sessionsSearch" class="input" type="search" placeholder="Search athlete, event, tags" />
+        </label>
+        <a class="btn btn-ghost" href="{{ url_for('metrics_help') }}">How we calculate load</a>
       </div>
-    </header>
-    <div id="sessionTimeline" class="timeline-grid"></div>
-  </section>
-
-  <section class="panel">
-    <header class="panel-header">
-      <div>
-        <h3>Strength log</h3>
-        <p class="muted">Grouped by day; expand to view sets.</p>
-      </div>
-      <label class="muted small">Athlete
-        <select id="strengthFilter"></select>
-      </label>
-    </header>
-    <div class="table-wrapper">
-      <table class="workout-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Athlete</th>
-            <th>Sets</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="strengthTable">
-          <tr><td colspan="4">No workout sets recorded yet.</td></tr>
+      <div class="table-wrapper">
+        <table class="data-table" data-mobile-cards="true" data-deletable="true">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Athlete</th>
+              <th>Team</th>
+              <th>Event</th>
+              <th>Best distance (m)</th>
+              <th>Volume (throws)</th>
+              <th>RPE (1–10)</th>
+              <th>Tags</th>
+              <th>Load (AU)</th>
+              <th></th>
+            </tr>
+          </thead>
+        <tbody id="sessionsTable">
+          <tr><td colspan="10">
+            <div class="panel-note">
+              <p class="section-label">No sessions yet</p>
+              <p class="muted small">Log your first session to see it here.</p>
+              <a class="btn btn-soft" href="{{ url_for('sessions_page') }}">Log session</a>
+            </div>
+          </td></tr>
         </tbody>
       </table>
     </div>
-  </section>
-</div>
+      <div class="panel-subtitle">Recent cards</div>
+      <div id="sessionTimeline" class="timeline-grid"></div>
+    </div>
+
+    <div class="log-view" data-log-view="strength">
+      <div class="filter-bar">
+        <label class="input-label">
+          Athlete
+          <select id="strengthFilter"></select>
+        </label>
+        {% if dashboard_onboarding and dashboard_onboarding.demo_data_active %}
+        <div class="panel-note muted small">Demo data shown to preview strength logs. It will disappear as soon as you log a real lift.</div>
+        {% endif %}
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table" data-mobile-cards="true">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Athlete</th>
+              <th>Lift</th>
+              <th>Sets × reps</th>
+              <th>Load (kg)</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+        <tbody id="strengthTable">
+          <tr><td colspan="6">
+            <div class="panel-note">
+              <p class="section-label">No lifts logged</p>
+              <p class="muted small">Log a lift in Weight Room to see it here.</p>
+              <a class="btn btn-soft" href="{{ url_for('weight_room_page') }}">Log lift</a>
+            </div>
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Import historical sessions (CSV)</h3>
+      <p class="muted small">Columns: date, athlete_name, team_name, event, best_distance, rpe, tags, notes.</p>
+    </div>
+  </header>
+  {% if g.user.role == 'head_coach' %}
+    <form class="stack-form" id="sessionImportForm">
+      <label class="full">
+        <span>Upload CSV</span>
+        <input type="file" name="file" accept=".csv" />
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Import sessions</button>
+        <p class="muted small" id="sessionImportStatus">Awaiting file</p>
+      </div>
+    </form>
+  {% else %}
+    <div class="panel-note muted small">Session imports available to head coaches only.</div>
+  {% endif %}
+</section>
+
+<script>
+  const tabButtons = document.querySelectorAll('[data-log-tab]');
+  const views = document.querySelectorAll('[data-log-view]');
+  tabButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = button.dataset.logTab;
+      tabButtons.forEach((el) => {
+        el.classList.toggle('is-active', el === button);
+        el.setAttribute('aria-selected', el === button ? 'true' : 'false');
+      });
+      views.forEach((view) => {
+        view.classList.toggle('is-active', view.dataset.logView === target);
+      });
+    });
+  });
+</script>
 {% endblock %}

@@ -67,6 +67,69 @@ Bootstrap a sandbox dataset with:
 python -m javelin_tracker seed --source demo/demo_sessions.json --force
 ```
 
+## Web app deployment (coaches/programs)
+
+### Configuration
+- `SECRET_KEY` (or `THROWS_TRACKER_SECRET`): required in production for session security.
+- `DATA_DIR` / `THROWS_TRACKER_DATA_DIR`: where the SQLite database and session JSON live (mount a persistent volume in Docker).
+- `SESSION_COOKIE_SECURE=1` and `FORCE_HTTPS=1`: enable when serving behind HTTPS.
+- `FLASK_ENV=production`: disable debug mode.
+
+### Run with Docker
+```
+docker build -t javelin-tracker .
+docker run -p 8000:8000 -e SECRET_KEY=change-me -e THROWS_TRACKER_DATA_DIR=/data -v $(pwd)/data:/data javelin-tracker
+```
+The container starts gunicorn on port 8000. Mount `/data` for persistence and back up that directory regularly.
+
+### Local run (gunicorn)
+```
+export SECRET_KEY=change-me
+export THROWS_TRACKER_DATA_DIR=./data
+gunicorn -b 0.0.0.0:8000 javelin_tracker.webapp:app
+```
+
+### Migrations and schema
+Data is stored in SQLite by default. Schema changes are applied automatically at startup; keep backups of your data directory before upgrading. For production, use a durable volume and snapshot it before deploys. If you point `DB_FILE`/`DATA_DIR` at a different path, the app will initialise the schema there.
+
+### Backups
+- Take regular copies of the data directory (or the configured DB file) before upgrades.
+- For containerised deployments, snapshot the `/data` volume or dump the database on a schedule to object storage.
+- To restore, stop the app, replace the DB file/volume with the backup, then restart.
+
+### Security notes
+- Passwords are hashed; set a strong `SECRET_KEY`.
+- Login attempts are rate-limited.
+- Use HTTPS in production and set `SESSION_COOKIE_SECURE=1`.
+- Restrict imports/exports and team/role management to head coach roles.
+
+## Web app features (Coach Command Center)
+
+- **Dashboard & Analytics**
+  - Hero metrics (PBs, sessions, load in AU, ACWR risk flags) with tooltips explaining how load/readiness is calculated.
+  - Load/readiness help page (`/help/metrics`) linked throughout.
+  - Demo data preview is clearly labeled and removed once real sessions/athletes are added.
+- **Sessions & Logs**
+  - Fast logging with templates (competition/technical/heavy), Save & Stay / Save & New, sticky recent fields.
+  - Team-aware logs and filters; responsive mobile tables.
+  - Inline validation (required fields, RPE ranges) and toasts for success/error.
+- **Teams & Roles**
+  - Teams table (multi-team programs) with team filters across dashboard/logs/analytics/reports.
+  - Roles: head coach (full access, imports/exports/teams), assistants (limited), trainer/S&C planned.
+- **Athletes**
+  - Roster with team assignment, height/weight/BMI, strength benchmarks; inline errors and empty-state guidance.
+- **Imports/Exports**
+  - CSV roster import; session import; CSV export of sessions. Restricted to head coach.
+- **Weight Room**
+  - Daily plan, quick log, manual lift entry, and strength log table; demo notice clears with real data.
+- **ThrowAI (Forecasts)**
+  - Time-series forecasts per athlete/metric (throw distance, session load, etc.) with model selection (Holt/WLS/poly) and confidence (RMSE).
+  - Natural-language explanations of trends/magnitude; “How we calculate forecasts” link.
+- **Reports**
+  - Weekly PDF generation with team filters and window context; report status card; CLI summary refresh.
+- **Privacy & Health**
+  - Privacy page describing what’s stored and who can see it; `/health` endpoint for uptime checks.
+
 ## CLI overview
 
 - `log` – Record a session (best, per-throw distances, RPE, duration, notes, tags, event, athlete/team)

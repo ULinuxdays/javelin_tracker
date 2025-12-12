@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import csv
+import logging
+import sqlite3
 import os
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Any, Iterable
+from collections import defaultdict
+from datetime import timedelta as datetime_timedelta
 
 from flask import (
     Flask,
@@ -20,25 +25,42 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from .. import analysis, services, storage
+from .. import services, storage
 from ..reports import generate_weekly_report
 from ..constants import DEFAULT_ATHLETE_PLACEHOLDER
 from ..env import LEGACY_PREFIX, PRIMARY_PREFIX
-from ..models import DEFAULT_EVENT, Session
+from ..models import DEFAULT_EVENT
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 WEBAPP_DATA = BASE_DIR / "data" / "webapp"
 USERS_FILE = WEBAPP_DATA / "users.json"
 
 
+FAILED_LOGINS: dict[str, list[datetime]] = defaultdict(list)
+MAX_FAILED_ATTEMPTS = 5
+FAILED_WINDOW_MINUTES = 10
+
+
 def create_app() -> Flask:
     WEBAPP_DATA.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     app = Flask(
         __name__,
         static_folder=str(Path(__file__).parent / "static"),
         template_folder=str(Path(__file__).parent / "templates"),
     )
-    app.secret_key = os.environ.get("THROWS_TRACKER_SECRET", "dev-secret")
+    env_secret = os.environ.get("THROWS_TRACKER_SECRET") or os.environ.get("JAVELIN_TRACKER_SECRET") or os.environ.get(
+        "SECRET_KEY"
+    )
+    if not env_secret and os.environ.get("FLASK_ENV") == "production":
+        raise RuntimeError("SECRET_KEY/THROWS_TRACKER_SECRET must be set in production.")
+    app.secret_key = env_secret or "dev-secret"
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
+        PREFERRED_URL_SCHEME="https" if os.environ.get("FORCE_HTTPS", "0") == "1" else "http",
+    )
 
     @app.before_request
     def load_user() -> None:
@@ -49,6 +71,17 @@ def create_app() -> Flask:
             if g.user:
                 # Ensure every request is scoped to the active user's datastore
                 _set_user_env(user_id)
+            _ensure_default_team(user_id)
+
+    @app.context_processor
+    def inject_onboarding():
+        onboarding = None
+        try:
+            if getattr(g, "user", None):
+                onboarding = _compute_onboarding_progress(g.user["id"])
+        except Exception:
+            onboarding = None
+        return {"dashboard_onboarding": onboarding}
 
     register_routes(app)
     register_api(app)
@@ -65,6 +98,21 @@ def login_required(view):
     return wrapped
 
 
+def require_role(*roles: str):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            user = getattr(g, "user", None)
+            role = user.get("role") if user else None
+            if role not in roles:
+                return jsonify({"error": "forbidden"}), 403
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
 def register_routes(app: Flask) -> None:
     @app.route("/")
     def index():
@@ -78,10 +126,16 @@ def register_routes(app: Flask) -> None:
         if request.method == "POST":
             email = (request.form.get("email") or "").strip().lower()
             password = request.form.get("password") or ""
+            remote_addr = request.remote_addr or "unknown"
+            if _is_rate_limited(remote_addr):
+                error = "Too many attempts. Try again in a few minutes."
+                return render_template("login.html", error=error, page_slug="login"), 429
             user = _get_user_by_email(email)
             if not user or not check_password_hash(user["password_hash"], password):
                 error = "Invalid email or password."
+                _record_failed_login(remote_addr)
             else:
+                _clear_failed_login(remote_addr)
                 flask_session["user_id"] = user["id"]
                 return redirect(url_for("dashboard"))
         return render_template("login.html", error=error, page_slug="login")
@@ -95,6 +149,8 @@ def register_routes(app: Flask) -> None:
             password = request.form.get("password") or ""
             if not email or not password:
                 error = "Email and password are required."
+            elif len(password) < 8:
+                error = "Use a password with at least 8 characters."
             elif _get_user_by_email(email):
                 error = "Account already exists for that email."
             else:
@@ -111,7 +167,16 @@ def register_routes(app: Flask) -> None:
     @app.route("/dashboard")
     @login_required
     def dashboard():
-        return render_template("dashboard.html", page_slug="dashboard")
+        demo_seeded = _maybe_seed_demo_data(g.user["id"])
+        onboarding = _compute_onboarding_progress(g.user["id"])
+        return render_template(
+            "dashboard.html",
+            page_slug="dashboard",
+            demo_seeded=demo_seeded,
+            dashboard_onboarding=onboarding,
+            acute_days=7,
+            chronic_days=28,
+        )
 
     @app.route("/sessions")
     @login_required
@@ -126,7 +191,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/analytics")
     @login_required
     def analytics_page():
-        return render_template("analytics.html", page_slug="analytics")
+        return render_template("analytics.html", page_slug="analytics", acute_days=7, chronic_days=28)
 
     @app.route("/throwai")
     @login_required
@@ -141,12 +206,30 @@ def register_routes(app: Flask) -> None:
     @app.route("/reports")
     @login_required
     def reports_page():
-        return render_template("reports.html", page_slug="reports")
+        return render_template("reports.html", page_slug="reports", acute_days=7, chronic_days=28)
 
     @app.route("/athletes")
     @login_required
     def athletes_page():
         return render_template("athletes.html", page_slug="athletes")
+
+    @app.route("/help/metrics")
+    @login_required
+    def metrics_help():
+        return render_template("metrics_explainer.html", page_slug="metrics_help", page_title="Load & readiness")
+
+    @app.route("/quickstart")
+    @login_required
+    def quickstart_page():
+        return render_template("quickstart.html", page_slug="quickstart", page_title="Quick start guide")
+
+    @app.route("/privacy")
+    def privacy():
+        return render_template("privacy.html", page_slug="privacy", page_title="Privacy & data")
+
+    @app.route("/health")
+    def health():
+        return jsonify({"status": "ok"}), 200
 
 
 def register_api(app: Flask) -> None:
@@ -161,7 +244,9 @@ def register_api(app: Flask) -> None:
     def api_create_session():
         payload = request.get_json(force=True) or {}
         athlete_name = (payload.get("athlete") or DEFAULT_ATHLETE_PLACEHOLDER).strip() or DEFAULT_ATHLETE_PLACEHOLDER
-        athlete_id = _get_or_create_athlete(g.user["id"], athlete_name)
+        team_name = (payload.get("team") or "Unassigned").strip() or "Unassigned"
+        team_id = _get_or_create_team(g.user["id"], team_name)
+        athlete_id = _get_or_create_athlete(g.user["id"], athlete_name, team_id)
         try:
             result = services.build_session_from_inputs(
                 date_text=payload.get("date"),
@@ -172,7 +257,7 @@ def register_api(app: Flask) -> None:
                 tags=payload.get("tags"),
                 duration_minutes=payload.get("duration_minutes"),
                 athlete=athlete_name,
-                team=payload.get("team"),
+                team=team_name,
                 event=payload.get("event") or DEFAULT_EVENT,
                 implement_weight_kg=payload.get("implement_weight_kg"),
                 technique=payload.get("technique"),
@@ -185,7 +270,10 @@ def register_api(app: Flask) -> None:
         session_dict["id"] = payload.get("id") or uuid.uuid4().hex[:16]
         session_dict["athlete_hash"] = uuid.uuid5(uuid.NAMESPACE_DNS, athlete_name).hex[:12]
         session_dict["event"] = payload.get("event") or DEFAULT_EVENT
+        session_dict["team"] = team_name
+        session_dict["team_id"] = team_id
         _append_session(g.user["id"], session_dict)
+        _purge_demo_data_if_needed(g.user["id"])
         # Keep athlete table in sync by logging throw distance if present
         if session_dict.get("best"):
             storage.log_throw_distance(athlete_id, session_dict["date"], session_dict["event"], session_dict["best"])
@@ -232,6 +320,7 @@ def register_api(app: Flask) -> None:
             events = [str(e).strip() for e in events_raw if str(e).strip()]
         team_name = (payload.get("team") or "").strip() or None
         school_name = (payload.get("school") or "").strip() or None
+        team_filter = (payload.get("team") or "").strip() or None
         week_ending_raw = (payload.get("week_ending") or "").strip()
         week_ending: date | None = None
         if week_ending_raw:
@@ -242,6 +331,8 @@ def register_api(app: Flask) -> None:
 
         _set_user_env(g.user["id"])
         sessions = storage.load_sessions()
+        if team_filter:
+            sessions = [s for s in sessions if (s.get("team") or "").lower() == team_filter.lower()]
         output_dir = WEBAPP_DATA / "userspace" / g.user["id"] / "reports"
         output_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -256,6 +347,7 @@ def register_api(app: Flask) -> None:
             )
         except Exception as exc:  # pragma: no cover
             return jsonify({"error": str(exc)}), 400
+        _record_report_generated(g.user["id"])
         return jsonify(
             {
                 "message": f"Saved {len(pdf_paths)} PDF report(s) to {output_dir}",
@@ -339,6 +431,12 @@ def register_api(app: Flask) -> None:
         if payload.get("squat_1rm_kg"):
             benchmarks["back squat"] = float(payload.get("squat_1rm_kg"))
         try:
+            team_id = None
+            if payload.get("team_id"):
+                try:
+                    team_id = int(payload["team_id"])
+                except Exception:
+                    team_id = _lookup_team_id_by_name(g.user["id"], str(payload.get("team_id")))
             storage.update_athlete_profile(
                 athlete_id,
                 height_cm=_float_or_none(payload.get("height_cm")),
@@ -346,10 +444,121 @@ def register_api(app: Flask) -> None:
                 new_strength_benchmarks=benchmarks or None,
                 notes=payload.get("notes"),
             )
+            if team_id:
+                _update_athlete_team(g.user["id"], athlete_id, team_id)
         except Exception as exc:  # pragma: no cover
             return jsonify({"error": str(exc)}), 400
         athlete = _fetch_athlete_profile(g.user["id"], athlete_id)
         return jsonify({"athlete": athlete})
+
+    @app.post("/api/import/roster")
+    @login_required
+    @require_role("head_coach")
+    def api_import_roster():
+        if "file" not in request.files:
+            return jsonify({"error": "Missing CSV file"}), 400
+        file = request.files["file"]
+        rows = file.read().decode("utf-8").splitlines()
+        summary = {"created": 0, "errors": []}
+        reader = csv.DictReader(rows)
+        required = {"first_name", "last_name"}
+        if not required.issubset(set(reader.fieldnames or [])):
+            return jsonify({"error": "CSV must include first_name,last_name columns"}), 400
+        for index, row in enumerate(reader, start=2):
+            try:
+                name = f"{row.get('first_name','').strip()} {row.get('last_name','').strip()}".strip()
+                if not name:
+                    raise ValueError("Name missing")
+                team_name = (row.get("team_name") or "Unassigned").strip() or "Unassigned"
+                team_id = _get_or_create_team(g.user["id"], team_name)
+                athlete_id = _get_or_create_athlete(g.user["id"], name, team_id)
+                if team_id:
+                    _update_athlete_team(g.user["id"], athlete_id, team_id)
+                height = _float_or_none(row.get("height_cm"))
+                weight = _float_or_none(row.get("weight_kg"))
+                storage.update_athlete_profile(athlete_id, height_cm=height, weight_kg=weight)
+                summary["created"] += 1
+            except Exception as exc:
+                summary["errors"].append({"row": index, "error": str(exc)})
+        return jsonify(summary)
+
+    @app.post("/api/import/sessions")
+    @login_required
+    @require_role("head_coach")
+    def api_import_sessions():
+        if "file" not in request.files:
+            return jsonify({"error": "Missing CSV file"}), 400
+        file = request.files["file"]
+        rows = file.read().decode("utf-8").splitlines()
+        reader = csv.DictReader(rows)
+        required = {"date", "athlete_name", "event"}
+        if not required.issubset(set(reader.fieldnames or [])):
+            return jsonify({"error": "CSV must include date, athlete_name, event"}), 400
+        summary = {"created": 0, "errors": []}
+        for index, row in enumerate(reader, start=2):
+            try:
+                athlete = (row.get("athlete_name") or DEFAULT_ATHLETE_PLACEHOLDER).strip()
+                team_name = (row.get("team_name") or "Unassigned").strip() or "Unassigned"
+                team_id = _get_or_create_team(g.user["id"], team_name)
+                athlete_id = _get_or_create_athlete(g.user["id"], athlete, team_id)
+                if team_id:
+                    _update_athlete_team(g.user["id"], athlete_id, team_id)
+                session_result = services.build_session_from_inputs(
+                    date_text=row.get("date"),
+                    best=row.get("best_distance") or row.get("best"),
+                    throws=row.get("throws") or "",
+                    rpe=row.get("rpe"),
+                    notes=row.get("notes"),
+                    tags=row.get("tags"),
+                    duration_minutes=row.get("duration_minutes"),
+                    athlete=athlete,
+                    team=team_name,
+                    event=row.get("event") or DEFAULT_EVENT,
+                    implement_weight_kg=row.get("implement_weight_kg"),
+                    technique=row.get("technique"),
+                    fouls=row.get("fouls"),
+                )
+                session_payload = session_result.session.to_dict()
+                session_payload["athlete"] = athlete
+                session_payload["team"] = team_name
+                session_payload["id"] = uuid.uuid4().hex[:16]
+                session_payload["athlete_hash"] = uuid.uuid5(uuid.NAMESPACE_DNS, athlete).hex[:12]
+                session_payload["team_id"] = team_id
+                _append_session(g.user["id"], session_payload)
+                summary["created"] += 1
+            except Exception as exc:
+                summary["errors"].append({"row": index, "error": str(exc)})
+        return jsonify(summary)
+
+    @app.get("/api/export/sessions")
+    @login_required
+    def api_export_sessions():
+        team = request.args.get("team")
+        sessions = _load_sessions(g.user["id"])
+        if team and team.lower() != "all":
+            sessions = [s for s in sessions if (s.get("team") or "").lower() == team.lower()]
+        output_dir = WEBAPP_DATA / "userspace" / g.user["id"] / "exports"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"sessions_export_{datetime.utcnow().isoformat()}.csv"
+        storage.export_sessions_csv(path, sessions)
+        return jsonify({"file": str(path)})
+
+    @app.get("/api/teams")
+    @login_required
+    def api_teams():
+        teams = _list_teams(g.user["id"])
+        return jsonify({"teams": teams})
+
+    @app.post("/api/teams")
+    @login_required
+    @require_role("head_coach")
+    def api_create_team():
+        payload = request.get_json(force=True) or {}
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "Team name is required."}), 400
+        team_id = _get_or_create_team(g.user["id"], name)
+        return jsonify({"team": {"id": team_id, "name": name}})
 
 
 def _set_user_env(user_id: str) -> None:
@@ -357,12 +566,15 @@ def _set_user_env(user_id: str) -> None:
     user_dir.mkdir(parents=True, exist_ok=True)
     db_file = user_dir / "throws_tracker.db"
     sessions_file = user_dir / "sessions.json"
+    onboarding_file = user_dir / "onboarding.json"
     os.environ[f"{PRIMARY_PREFIX}DATA_DIR"] = str(user_dir)
     os.environ[f"{PRIMARY_PREFIX}DB_FILE"] = str(db_file)
     os.environ[f"{PRIMARY_PREFIX}SESSIONS_FILE"] = str(sessions_file)
     os.environ[f"{LEGACY_PREFIX}DATA_DIR"] = str(user_dir)
     os.environ[f"{LEGACY_PREFIX}DB_FILE"] = str(db_file)
     os.environ[f"{LEGACY_PREFIX}SESSIONS_FILE"] = str(sessions_file)
+    if not onboarding_file.exists():
+        onboarding_file.write_text(json.dumps({}, indent=2))
 
 
 def _load_sessions(user_id: str) -> list[dict[str, Any]]:
@@ -371,6 +583,7 @@ def _load_sessions(user_id: str) -> list[dict[str, Any]]:
     # Fill required defaults for downstream analytics
     for record in sessions:
         record.setdefault("event", DEFAULT_EVENT)
+        record.setdefault("team", "Unassigned")
         record.setdefault("id", uuid.uuid4().hex[:16])
         if record.get("best") is None:
             throws = record.get("throws") or []
@@ -415,6 +628,8 @@ def _build_summary(user_id: str, *, group: str) -> dict[str, Any]:
             "throws": row.throw_volume,
             "acwrRolling": row.acwr_rolling,
             "acwrEwma": row.acwr_ewma,
+            "monotony": row.monotony_7d,
+            "strain": row.strain_7d,
             "risk": row.risk_flag,
             "marker": row.marker,
         }
@@ -433,6 +648,8 @@ def _build_summary(user_id: str, *, group: str) -> dict[str, Any]:
             "throws": row.throw_volume,
             "acwrRolling": row.acwr_rolling,
             "acwrEwma": row.acwr_ewma,
+            "monotony": row.monotony_7d,
+            "strain": row.strain_7d,
             "risk": row.risk_flag,
             "marker": row.marker,
         }
@@ -530,11 +747,16 @@ def _list_athletes(user_id: str, *, include_profile: bool = False) -> list[dict[
     athletes: list[dict[str, Any]] = []
     with storage.open_database(readonly=True) as conn:
         rows = conn.execute(
-            "SELECT id, name, height_cm, weight_kg, strength_benchmarks, notes FROM Athletes ORDER BY name"
+            """
+            SELECT a.id, a.name, a.height_cm, a.weight_kg, a.strength_benchmarks, a.notes, a.team_id, t.name
+            FROM Athletes a
+            LEFT JOIN Teams t ON a.team_id = t.id
+            ORDER BY a.name
+            """
         ).fetchall()
         for row in rows:
-            athlete_id, name, height, weight, benchmarks_json, notes = row
-            entry: dict[str, Any] = {"id": athlete_id, "name": name}
+            athlete_id, name, height, weight, benchmarks_json, notes, team_id, team_name = row
+            entry: dict[str, Any] = {"id": athlete_id, "name": name, "team_id": team_id, "team": team_name}
             if include_profile:
                 entry.update(
                     {
@@ -602,6 +824,7 @@ def _get_user_by_email(email: str) -> dict[str, Any] | None:
     users = _load_users()
     for user in users:
         if user["email"] == email:
+            user.setdefault("role", "head_coach")
             return user
     return None
 
@@ -610,6 +833,7 @@ def _get_user_by_id(user_id: str) -> dict[str, Any] | None:
     users = _load_users()
     for user in users:
         if user["id"] == user_id:
+            user.setdefault("role", "head_coach")
             return user
     return None
 
@@ -622,6 +846,7 @@ def _create_user(*, name: str, email: str, password: str) -> dict[str, Any]:
         "email": email,
         "password_hash": generate_password_hash(password),
         "created_at": datetime.utcnow().isoformat(),
+        "role": "head_coach",
     }
     users.append(new_user)
     _save_users(users)
@@ -655,14 +880,14 @@ def _lookup_athlete_id(user_id: str, name: str) -> int | None:
     return None
 
 
-def _get_or_create_athlete(user_id: str, name: str) -> int:
+def _get_or_create_athlete(user_id: str, name: str, team_id: int | None = None) -> int:
     clean = (name or DEFAULT_ATHLETE_PLACEHOLDER).strip() or DEFAULT_ATHLETE_PLACEHOLDER
     _set_user_env(user_id)
     with storage.open_database() as conn:
         row = conn.execute("SELECT id FROM Athletes WHERE name = ? LIMIT 1", (clean,)).fetchone()
         if row:
             return int(row[0])
-        cursor = conn.execute("INSERT INTO Athletes (name) VALUES (?)", (clean,))
+        cursor = conn.execute("INSERT INTO Athletes (name, team_id) VALUES (?, ?)", (clean, team_id))
         conn.commit()
         return int(cursor.lastrowid)
 
@@ -732,6 +957,270 @@ def _backfill_throw_logs(user_id: str, athlete_name: str, athlete_id: int) -> No
             storage.update_athlete_profile(athlete_id)
         except Exception:
             pass
+
+
+def _list_teams(user_id: str) -> list[dict[str, Any]]:
+    _set_user_env(user_id)
+    _ensure_default_team(user_id)
+    with storage.open_database(readonly=True) as conn:
+        rows = conn.execute(
+            "SELECT id, name, program_name, school_name, color, short_code FROM Teams ORDER BY name"
+        ).fetchall()
+    return [
+        {
+          "id": row[0],
+          "name": row[1],
+          "program_name": row[2],
+          "school_name": row[3],
+          "color": row[4],
+          "short_code": row[5],
+        }
+        for row in rows
+    ]
+
+
+def _get_or_create_team(user_id: str, name: str | None) -> int:
+    clean = (name or "Unassigned").strip() or "Unassigned"
+    _set_user_env(user_id)
+    try:
+        with storage.open_database() as conn:
+            row = conn.execute("SELECT id FROM Teams WHERE name = ? LIMIT 1", (clean,)).fetchone()
+            if row:
+                return int(row[0])
+            cursor = conn.execute("INSERT INTO Teams (name) VALUES (?)", (clean,))
+            conn.commit()
+            return int(cursor.lastrowid)
+    except sqlite3.OperationalError as exc:
+        if "no such table: Teams" not in str(exc):
+            raise
+        # legacy database without Teams table; rebuild schema then retry once
+        storage._ensure_database()
+        with storage.open_database() as conn:
+            row = conn.execute("SELECT id FROM Teams WHERE name = ? LIMIT 1", (clean,)).fetchone()
+            if row:
+                return int(row[0])
+            cursor = conn.execute("INSERT INTO Teams (name) VALUES (?)", (clean,))
+            conn.commit()
+            return int(cursor.lastrowid)
+
+
+def _ensure_default_team(user_id: str) -> int:
+    return _get_or_create_team(user_id, "Unassigned")
+
+
+def _lookup_team_id_by_name(user_id: str, name: str) -> int | None:
+    clean = (name or "").strip()
+    if not clean:
+        return None
+    _set_user_env(user_id)
+    with storage.open_database(readonly=True) as conn:
+        row = conn.execute("SELECT id FROM Teams WHERE name = ? LIMIT 1", (clean,)).fetchone()
+        if row:
+            return int(row[0])
+    return None
+
+
+def _update_athlete_team(user_id: str, athlete_id: int, team_id: int) -> None:
+    _set_user_env(user_id)
+    with storage.open_database() as conn:
+        conn.execute("UPDATE Athletes SET team_id = ? WHERE id = ?", (team_id, athlete_id))
+        conn.commit()
+
+
+def _record_failed_login(ip: str) -> None:
+    now = datetime.utcnow()
+    FAILED_LOGINS[ip].append(now)
+    cutoff = now - datetime_timedelta(minutes=FAILED_WINDOW_MINUTES)
+    FAILED_LOGINS[ip] = [ts for ts in FAILED_LOGINS[ip] if ts >= cutoff]
+
+
+def _clear_failed_login(ip: str) -> None:
+    FAILED_LOGINS.pop(ip, None)
+
+
+def _is_rate_limited(ip: str) -> bool:
+    now = datetime.utcnow()
+    cutoff = now - datetime_timedelta(minutes=FAILED_WINDOW_MINUTES)
+    attempts = FAILED_LOGINS.get(ip, [])
+    recent = [ts for ts in attempts if ts >= cutoff]
+    FAILED_LOGINS[ip] = recent
+    return len(recent) >= MAX_FAILED_ATTEMPTS
+
+
+def _load_onboarding_state(user_id: str) -> dict[str, Any]:
+    _set_user_env(user_id)
+    state_file = WEBAPP_DATA / "userspace" / user_id / "onboarding.json"
+    try:
+        raw = state_file.read_text()
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def _save_onboarding_state(user_id: str, state: dict[str, Any]) -> None:
+    _set_user_env(user_id)
+    state_file = WEBAPP_DATA / "userspace" / user_id / "onboarding.json"
+    current = _load_onboarding_state(user_id)
+    current.update(state)
+    state_file.write_text(json.dumps(current, indent=2))
+
+
+def _record_report_generated(user_id: str) -> None:
+    _save_onboarding_state(
+        user_id,
+        {
+            "last_report_generated": datetime.utcnow().isoformat(),
+        },
+    )
+
+
+def _maybe_seed_demo_data(user_id: str) -> bool:
+    flag = os.environ.get("ENABLE_DEMO_SEED", "1").lower()
+    if flag in {"0", "false", "no"}:
+        return False
+    athletes = _list_athletes(user_id)
+    sessions = _load_sessions(user_id)
+    if athletes or sessions:
+        return False
+    _set_user_env(user_id)
+    demo_team_id = _get_or_create_team(user_id, "Demo Team")
+    demo_athletes = [
+        {"name": "Demo Athlete A", "height_cm": 185, "weight_kg": 86, "team_id": demo_team_id},
+        {"name": "Demo Athlete B", "height_cm": 178, "weight_kg": 82, "team_id": demo_team_id},
+    ]
+    for entry in demo_athletes:
+        athlete_id = _get_or_create_athlete(user_id, entry["name"], entry.get("team_id"))
+        try:
+            storage.update_athlete_profile(
+                athlete_id,
+                height_cm=entry.get("height_cm"),
+                weight_kg=entry.get("weight_kg"),
+                notes="Demo profile",
+            )
+        except Exception:
+            continue
+    base_date = datetime.utcnow().date()
+    demo_sessions = []
+    throws_template = [61.2, 62.0, 63.1, 64.4]
+    for i in range(7):
+        day = base_date - timedelta(days=i)
+        athlete = demo_athletes[i % len(demo_athletes)]["name"]
+        athlete_team_id = demo_athletes[i % len(demo_athletes)]["team_id"]
+        # Give demo athlete A an upward trend and demo athlete B a downward trend
+        if athlete.endswith("A"):
+            best = 60.0 + i * 0.8
+        else:
+            best = 66.0 - i * 0.7
+        session = services.build_session_from_inputs(
+            date_text=day.isoformat(),
+            best=best,
+            throws=",".join(str(v) for v in throws_template),
+            rpe=6 + (i % 3),
+            notes="Demo session data to preview analytics.",
+            tags="demo, seeded",
+            duration_minutes=70 - i,
+            athlete=athlete,
+            event=DEFAULT_EVENT,
+            team="Demo Squad",
+            implement_weight_kg=0.8,
+            technique="Full run",
+            fouls=0,
+        )
+        session_dict = session.session.to_dict()
+        session_dict["id"] = uuid.uuid4().hex[:16]
+        session_dict["athlete"] = athlete
+        session_dict["athlete_hash"] = uuid.uuid5(uuid.NAMESPACE_DNS, athlete).hex[:12]
+        session_dict["event"] = DEFAULT_EVENT
+        session_dict["team"] = "Demo Team"
+        session_dict["team_id"] = athlete_team_id
+        session_dict["tags"] = ["demo", "seeded"]
+        demo_sessions.append(session_dict)
+    for entry in demo_sessions:
+        _append_session(user_id, entry)
+        if entry.get("best"):
+            try:
+                athlete_id = _lookup_athlete_id(user_id, entry.get("athlete") or "")
+                if athlete_id:
+                    storage.log_throw_distance(athlete_id, entry["date"], entry["event"], float(entry["best"]))
+            except Exception:
+                pass
+    _save_onboarding_state(user_id, {"demo_seeded": True})
+    return True
+
+
+def _purge_demo_data_if_needed(user_id: str) -> None:
+    """
+    Remove demo data once a real session/athlete exists so coaches are not confused.
+    """
+    sessions = _load_sessions(user_id)
+    athletes = _list_athletes(user_id)
+    has_real_session = any(not _is_demo_session(s) for s in sessions)
+    has_real_athlete = any(not _is_demo_name(a.get("name", "")) for a in athletes)
+    if not (has_real_session or has_real_athlete):
+        return
+    demo_sessions = [s for s in sessions if _is_demo_session(s)]
+    if demo_sessions:
+        remaining = [s for s in sessions if not _is_demo_session(s)]
+        storage.save_sessions(remaining)
+    with storage.open_database() as conn:
+        try:
+            conn.execute("DELETE FROM Athletes WHERE name LIKE 'Demo %'")
+            conn.commit()
+        except Exception:
+            pass
+    state = _load_onboarding_state(user_id)
+    state["demo_seeded"] = False
+    _save_onboarding_state(user_id, state)
+
+
+def _compute_onboarding_progress(user_id: str) -> dict[str, Any]:
+    athletes = _list_athletes(user_id)
+    sessions = _load_sessions(user_id)
+    state = _load_onboarding_state(user_id)
+    today = datetime.utcnow().date()
+    has_real_athletes = any(not _is_demo_name(a.get("name", "")) for a in athletes)
+    has_recent_session = False
+    for session in sessions:
+        if _is_demo_session(session):
+            continue
+        when = _parse_session_date(session)
+        if when and when >= today - timedelta(days=7):
+            has_recent_session = True
+            break
+    has_reports = bool(state.get("last_report_generated"))
+    reports_dir = WEBAPP_DATA / "userspace" / user_id / "reports"
+    if not has_reports and reports_dir.exists():
+        has_reports = any(reports_dir.glob("*.pdf"))
+    onboarding_complete = has_real_athletes and has_recent_session and has_reports
+    demo_data_active = bool(sessions or athletes) and not has_real_athletes and not has_recent_session
+    return {
+        "has_athletes": has_real_athletes,
+        "has_sessions": has_recent_session,
+        "has_reports": has_reports,
+        "onboarding_complete": onboarding_complete,
+        "demo_data_active": demo_data_active or bool(state.get("demo_seeded")),
+    }
+
+
+def _is_demo_name(name: str) -> bool:
+    return name.lower().startswith("demo")
+
+
+def _is_demo_session(session: dict[str, Any]) -> bool:
+    athlete_name = (session.get("athlete") or "").strip().lower()
+    tags = session.get("tags") or []
+    tag_string = ",".join(tags).lower() if isinstance(tags, list) else str(tags).lower()
+    return _is_demo_name(athlete_name) or "demo" in tag_string
+
+
+def _parse_session_date(session: dict[str, Any]) -> date | None:
+    raw = (session.get("date") or "").split("T")[0]
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw).date()
+    except Exception:
+        return None
 
 
 # Convenience entry point for `flask run` style discovery

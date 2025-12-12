@@ -34,4 +34,4 @@ USER throws
 VOLUME ["/data"]
 
 ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
-CMD ["javelin", "--help"]
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "javelin_tracker.webapp:app"]

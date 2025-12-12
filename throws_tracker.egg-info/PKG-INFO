@@ -124,6 +124,42 @@ Bootstrap a sandbox dataset with:
 python -m javelin_tracker seed --source demo/demo_sessions.json --force
 ```
 
+## Web app deployment (coaches/programs)
+
+### Configuration
+- `SECRET_KEY` (or `THROWS_TRACKER_SECRET`): required in production for session security.
+- `DATA_DIR` / `THROWS_TRACKER_DATA_DIR`: where the SQLite database and session JSON live (mount a persistent volume in Docker).
+- `SESSION_COOKIE_SECURE=1` and `FORCE_HTTPS=1`: enable when serving behind HTTPS.
+- `FLASK_ENV=production`: disable debug mode.
+
+### Run with Docker
+```
+docker build -t javelin-tracker .
+docker run -p 8000:8000 -e SECRET_KEY=change-me -e THROWS_TRACKER_DATA_DIR=/data -v $(pwd)/data:/data javelin-tracker
+```
+The container starts gunicorn on port 8000. Mount `/data` for persistence and back up that directory regularly.
+
+### Local run (gunicorn)
+```
+export SECRET_KEY=change-me
+export THROWS_TRACKER_DATA_DIR=./data
+gunicorn -b 0.0.0.0:8000 javelin_tracker.webapp:app
+```
+
+### Migrations and schema
+Data is stored in SQLite by default. Schema changes are applied automatically at startup; keep backups of your data directory before upgrading. For production, use a durable volume and snapshot it before deploys. If you point `DB_FILE`/`DATA_DIR` at a different path, the app will initialise the schema there.
+
+### Backups
+- Take regular copies of the data directory (or the configured DB file) before upgrades.
+- For containerised deployments, snapshot the `/data` volume or dump the database on a schedule to object storage.
+- To restore, stop the app, replace the DB file/volume with the backup, then restart.
+
+### Security notes
+- Passwords are hashed; set a strong `SECRET_KEY`.
+- Login attempts are rate-limited.
+- Use HTTPS in production and set `SESSION_COOKIE_SECURE=1`.
+- Restrict imports/exports and team/role management to head coach roles.
+
 ## CLI overview
 
 - `log` – Record a session (best, per-throw distances, RPE, duration, notes, tags, event, athlete/team)
