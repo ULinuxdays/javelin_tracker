@@ -1,6 +1,6 @@
 # Throws Tracker
 
-Command-line toolkit for capturing throwing sessions, analysing workload, and generating coaching/research reports across javelin, discus, shot, hammer (plus custom events).
+Coach Command Center web app + CLI for capturing throwing sessions, analysing workload/readiness, forecasting trends, and generating coaching reports across javelin, discus, shot, hammer (plus custom events).
 
 [![CI](https://github.com/uday/Javelin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/uday/Javelin/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/badge/PyPI-not--published-lightgrey?logo=pypi)](#installation)
@@ -8,16 +8,16 @@ Command-line toolkit for capturing throwing sessions, analysing workload, and ge
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-yellow.svg)](CHANGELOG.md)
 
-Note: The CLI binary is available as both `javelin` and `throws`. The package was formerly published as `javelin-tracker` and is now `throws-tracker`.
+Note: The CLI binary is available as both `javelin` and `throws`. The web app lives under `javelin_tracker/webapp`. The package was formerly published as `javelin-tracker` and is now `throws-tracker`.
 
 ## Highlights
 
 - Multi-event tracking with configurable allowlist (defaults: javelin, discus, shot, hammer)
 - Session-RPE workload plus ACWR (rolling and EWMA) and PB flags
-- Multi-athlete workflows with role-based scoping (coach vs athlete)
-- Exports with provenance (CSV, Parquet, JSON + metadata)
-- Plots and weekly PDF reports for athletes/events
-- Import/migration for legacy logs; deterministic demo datasets
+- Multi-athlete workflows with teams and role-based scoping (head coach, assistants)
+- Web app: dashboard + analytics with load/readiness tooltips, fast session logging with templates, team-aware logs, weight room planner/logs, ThrowAI forecasts with explanations, reports UI, privacy/help pages
+- Exports with provenance (CSV, Parquet, JSON + metadata); weekly PDF reports
+- Import/migration for legacy logs; deterministic demo datasets; CSV roster/session import
 - Optional SQLite-backed athlete profile, strength logs, and metric forecasting
 
 ## Installation
