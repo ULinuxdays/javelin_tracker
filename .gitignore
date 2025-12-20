@@ -2,3 +2,10 @@
 __pycache__/
 .DS_Store
 data/
+
+# Local-only biomechanics debug artifacts (videos/frames can be large and copyrighted)
+debug_assets/videos/*
+!debug_assets/videos/.gitkeep
+debug_assets/overlays_expected/*
+!debug_assets/overlays_expected/.gitkeep
+debug_assets/runs/

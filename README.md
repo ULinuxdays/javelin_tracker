@@ -75,6 +75,12 @@ python -m javelin_tracker seed --source demo/demo_sessions.json --force
 - Dev run (hot reload) on port 5001: `THROWS_TRACKER_POSE_TIME_SCALE=0.25 FLASK_DEBUG=1 PORT=5001 .venv/bin/python -m javelin_tracker.webapp`
 - Tracking quality knobs: `THROWS_TRACKER_POSE_LANDMARKER_MODEL_VARIANT=heavy|full|lite`, `THROWS_TRACKER_POSE_TIME_SCALE`, `THROWS_TRACKER_POSE_ASSUMED_FPS`.
 
+### Debugging tracking issues (repro harness)
+
+For deterministic reproduction of “anchor points don’t attach to joints” and other tracking bugs, use:
+- `debug_assets/README.md`
+- `scripts/biomech_repro.py` (`register`, `validate`, `run`)
+
 ## Web app deployment (coaches/programs)
 
 ### Configuration
