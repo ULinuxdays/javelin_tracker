@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "metric_aliases": {
+    "elbow_angle_at_release": [
+      "release.throwing_elbow_flexion_deg_at_release"
+    ],
+    "power_chain_lag_ms": [
+      "throw_metrics.power_chain_lag_ms",
+      "power_chain_lag_ms"
+    ]
+  },
+  "rules": [
+    {
+      "rule_id": "elbow_extension_release",
+      "priority": 90,
+      "severity": "warning",
+      "feedback_text": "Extend your elbow fully at release",
+      "condition": {
+        "metric": "elbow_angle_at_release",
+        "op": "<",
+        "value": 85,
+        "unit": "degrees"
+      }
+    },
+    {
+      "rule_id": "power_chain_lag_slow",
+      "priority": 80,
+      "severity": "warning",
+      "feedback_text": "Delay arm acceleration; let hips drive first",
+      "condition": {
+        "metric": "power_chain_lag_ms",
+        "op": ">",
+        "value": 100,
+        "unit": "ms"
+      }
+    }
+  ],
+  "templates": [
+    {
+      "rule_id": "template_release_speed_low",
+      "priority": 50,
+      "severity": "warning",
+      "feedback_text": "Increase speed through delivery; aim for a faster wrist at release",
+      "condition": {
+        "metric": "release.throwing_wrist_speed_at_release",
+        "op": "<",
+        "value": 0,
+        "unit": "rel_units/s",
+        "ideal": "higher"
+      }
+    },
+    {
+      "rule_id": "template_separation_low",
+      "priority": 50,
+      "severity": "warning",
+      "feedback_text": "Create more hip–shoulder separation before the strike; keep hips leading shoulders",
+      "condition": {
+        "metric": "delivery.shoulder_hip_separation_deg_mean",
+        "op": "<",
+        "value": 0,
+        "unit": "degrees",
+        "ideal": "higher"
+      }
+    },
+    {
+      "rule_id": "template_delivery_time_outside_range",
+      "priority": 40,
+      "severity": "info",
+      "feedback_text": "Keep delivery timing consistent; avoid rushing or stalling",
+      "condition": {
+        "any": [
+          {
+            "metric": "delivery.duration_ms",
+            "op": "<",
+            "value": 0,
+            "unit": "ms"
+          },
+          {
+            "metric": "delivery.duration_ms",
+            "op": ">",
+            "value": 0,
+            "unit": "ms"
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "template_asymmetry_high",
+      "priority": 40,
+      "severity": "warning",
+      "feedback_text": "Reduce left/right asymmetry; keep shoulders level and balanced",
+      "condition": {
+        "metric": "release.shoulder_height_asymmetry_mean",
+        "op": ">",
+        "value": 0,
+        "unit": "rel_units",
+        "ideal": "lower"
+      }
+    }
+  ]
+}
+

@@ -236,6 +236,11 @@ class Session:
     technique: Optional[str] = None
     fouls: Optional[int] = None
     schema_version: int = CURRENT_SCHEMA_VERSION
+    video_id: Optional[str] = None
+    biomechanics_analysis_id: Optional[str] = None
+    biomechanics_status: Optional[str] = None
+    biomechanics_timestamp: Optional[str] = None
+    biomechanics_result_path: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Make the session JSON serialisable."""
@@ -248,6 +253,11 @@ class Session:
             "duration_minutes": self.duration_minutes,
             "load": calculate_session_load(self.rpe, self.duration_minutes),
             "schema_version": self.schema_version,
+            "video_id": self.video_id,
+            "biomechanics_analysis_id": self.biomechanics_analysis_id,
+            "biomechanics_status": self.biomechanics_status,
+            "biomechanics_timestamp": self.biomechanics_timestamp,
+            "biomechanics_result_path": self.biomechanics_result_path,
         }
         if self.team:
             payload["team"] = self.team

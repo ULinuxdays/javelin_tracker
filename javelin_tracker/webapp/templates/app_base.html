@@ -28,6 +28,10 @@
         <span class="nav-icon" aria-hidden="true"></span>
         <span>Logs</span>
       </a>
+      <a href="{{ url_for('biomechanics_page') }}" class="sidebar__link {% if page_slug == 'biomechanics' %}is-active{% endif %}" aria-current="{% if page_slug == 'biomechanics' %}page{% endif %}">
+        <span class="nav-icon" aria-hidden="true"></span>
+        <span>Biomechanics</span>
+      </a>
       <a href="{{ url_for('analytics_page') }}" class="sidebar__link {% if page_slug == 'analytics' %}is-active{% endif %}" aria-current="{% if page_slug == 'analytics' %}page{% endif %}">
         <span class="nav-icon" aria-hidden="true"></span>
         <span>Analytics</span>

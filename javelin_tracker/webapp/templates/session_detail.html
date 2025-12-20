@@ -1,0 +1,139 @@
+{% extends "app_base.html" %}
+
+{% block extra_head %}
+  {{ super() }}
+  {% if session_record.get("biomechanics_status") %}
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin="anonymous"></script>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Session</h3>
+      <p class="muted small">{{ session_record.get("date", "—") }} · {{ session_record.get("athlete", "—") }} · {{ session_record.get("event", "—") }}</p>
+    </div>
+    <a class="btn btn-ghost" href="{{ url_for('logs_page') }}">Back to logs</a>
+  </header>
+  <div class="table-wrapper">
+    <table class="data-table">
+      <tbody>
+        <tr><th>Date</th><td>{{ session_record.get("date", "—") }}</td></tr>
+        <tr><th>Athlete</th><td>{{ session_record.get("athlete", "—") }}</td></tr>
+        <tr><th>Team</th><td>{{ session_record.get("team", "Unassigned") }}</td></tr>
+        <tr><th>Event</th><td>{{ session_record.get("event", "—") }}</td></tr>
+        <tr><th>Best (m)</th><td>{{ session_record.get("best", "—") }}</td></tr>
+        <tr><th>Volume (throws)</th><td>{{ (session_record.get("throws") or [])|length }}</td></tr>
+        <tr><th>RPE</th><td>{{ session_record.get("rpe", "—") }}</td></tr>
+        <tr><th>Duration (min)</th><td>{{ session_record.get("duration_minutes", "—") }}</td></tr>
+        <tr><th>Tags</th><td>{{ (session_record.get("tags") or [])|join(", ") if session_record.get("tags") else "—" }}</td></tr>
+        <tr><th>Notes</th><td>{{ session_record.get("notes", "—") }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Biomechanics</h3>
+      <p class="muted small">
+        Status: {{ session_record.get("biomechanics_status") or "—" }}
+        {% if session_record.get("biomechanics_timestamp") %}
+        · {{ session_record.get("biomechanics_timestamp") }}
+        {% endif %}
+      </p>
+    </div>
+    {% if session_record.get("biomechanics_status") %}
+    <div class="tab-group" role="tablist" aria-label="Biomechanics views">
+      <button class="chip is-active" data-biomech-tab="summary" role="tab" aria-selected="true">Summary</button>
+      <button class="chip" data-biomech-tab="viewer" role="tab" aria-selected="false">View Biomechanics</button>
+    </div>
+    {% endif %}
+  </header>
+
+  <div class="biomech-views">
+    <div class="biomech-view is-active" data-biomech-view="summary">
+      <div class="table-wrapper">
+        <table class="data-table">
+          <tbody>
+            <tr><th>Video ID</th><td>{{ session_record.get("video_id") or "—" }}</td></tr>
+            <tr><th>Analysis ID</th><td>{{ session_record.get("biomechanics_analysis_id") or "—" }}</td></tr>
+            <tr><th>Result path</th><td><code>{{ session_record.get("biomechanics_result_path") or "—" }}</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      {% if biomechanics.get("errors") %}
+        <div class="panel-note muted small">
+          <p class="section-label">Biomechanics notes</p>
+          <ul class="muted small checklist">
+            {% for err in biomechanics.get("errors", []) %}
+              <li>{{ err }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% if biomechanics.get("comparison_report") %}
+        <div class="subpanel">
+          <header class="panel-header">
+            <div>
+              <h4>Comparison report</h4>
+              <p class="muted small">Athlete vs elite reference (when available).</p>
+            </div>
+          </header>
+          <div class="summary-grid">
+            <div>
+              <p class="panel-label">Overall score</p>
+              <div class="muted">{{ biomechanics.get("comparison_report", {}).get("overall_score", "—") }}</div>
+            </div>
+            <div class="full">
+              <p class="panel-label">Top issues</p>
+              <ul class="muted small checklist">
+                {% for issue in biomechanics.get("comparison_report", {}).get("top_issues", []) %}
+                  <li>{{ issue.get("metric", "—") }} (z={{ issue.get("z_score", "—") }})</li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if biomechanics.get("feedback") %}
+        <div class="subpanel">
+          <header class="panel-header">
+            <div>
+              <h4>Coaching cues</h4>
+              <p class="muted small">Actionable feedback generated from the comparison report.</p>
+            </div>
+          </header>
+          <ul class="muted small checklist">
+            {% for cue in biomechanics.get("feedback", []) %}
+              <li><strong>{{ cue.get("metric_name", "metric") }}</strong>: {{ cue.get("feedback_text", "") }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="biomech-view" data-biomech-view="viewer">
+      <div id="biomechanicsViewerRoot"
+           data-session-id="{{ session_record.get('id') }}"
+           data-athlete-name="{{ session_record.get('athlete', '') }}">
+      </div>
+      <noscript>
+        <div class="panel-note muted small">Enable JavaScript to view biomechanics charts and video overlay.</div>
+      </noscript>
+    </div>
+  </div>
+</section>
+
+{% if session_record.get("biomechanics_status") %}
+  <script type="text/babel" data-presets="env,react" src="{{ url_for('biomechanics_viewer_frontend') }}"></script>
+{% endif %}
+{% endblock %}

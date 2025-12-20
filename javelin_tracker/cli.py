@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import platform
+import re
+import shutil
 from datetime import date, datetime, timezone
-from pathlib import Path
 from functools import lru_cache
 from importlib import metadata
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 import typer
 
+from . import biomechanics
 from .constants import DEFAULT_ATHLETE_PLACEHOLDER
 from .config import as_dict as config_as_dict, get_config
 from .env import get_env
@@ -32,6 +36,18 @@ from .services import (
     load_seed_payload,
     render_summary_table,
 )
+from javelin_tracker.biomechanics.database.elite_reference import (
+    compute_elite_reference_profile,
+    compute_style_profiles,
+    get_reference_value,
+)
+from javelin_tracker.biomechanics.elite_database.init_elite_database import REQUIRED_COLUMNS
+from javelin_tracker.biomechanics.database.validation import (
+    exclude_throw,
+    load_exclusions,
+    recompute_profiles_after_exclusions,
+    validate_elite_profiles,
+)
 from .storage import (
     append_session,
     load_sessions,
@@ -44,6 +60,8 @@ from .storage import (
 )
 
 app = typer.Typer(help="Capture, review, and visualise multi-event throwing sessions.")
+biomechanics_app = typer.Typer(help="Biomechanics utilities for pose/video workflows.")
+elite_db_app = typer.Typer(help="Elite database management (processing, profiles, QC).")
 
 
 def _fail(message: str, *, code: int = 1) -> None:
@@ -1242,6 +1260,503 @@ def _coerce_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+_ELITE_DB_QUALITY_COLUMN = "quality_score"
+_ELITE_DB_SLUG_RE = re.compile(r"[^A-Za-z0-9_]+")
+
+
+def _elite_db_slug(value: str) -> str:
+    text = (value or "").strip().replace(" ", "_")
+    text = _ELITE_DB_SLUG_RE.sub("_", text)
+    return text.strip("_") or "unknown"
+
+
+def _elite_db_throw_id_from_row(row: Mapping[str, str]) -> str:
+    thrower = _elite_db_slug(row.get("thrower_name", ""))
+    throw_number = _elite_db_slug(row.get("throw_number", ""))
+    return f"{thrower}_{throw_number}".strip("_")
+
+
+def _elite_db_parse_throw_parts(value: str) -> tuple[str | None, str | None]:
+    """Best-effort parse of `{thrower}_{throw_number}` strings."""
+    text = (value or "").strip()
+    match = re.match(r"(.+)_([0-9]+)$", text)
+    if not match:
+        return None, None
+    thrower_part = match.group(1).replace("_", " ").strip()
+    throw_number = match.group(2).strip()
+    return (thrower_part or None), (throw_number or None)
+
+
+def _elite_db_configure_logger(log_path: Path) -> logging.Logger:
+    log = logging.getLogger("javelin_tracker.elite_db")
+    log.setLevel(logging.INFO)
+    log.propagate = False
+
+    for handler in list(log.handlers):
+        log.removeHandler(handler)
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.addHandler(handler)
+    return log
+
+
+def _elite_db_get_pose_pipeline() -> object:
+    try:
+        from javelin_tracker.biomechanics.pose_estimation.pipeline import PosePipeline
+    except Exception as exc:  # pragma: no cover - optional heavy deps
+        _fail(
+            "PosePipeline dependencies are missing. Install `opencv-python` and `mediapipe` to process videos.",
+            code=2,
+        )
+        raise typer.Exit(code=2) from exc
+    return PosePipeline()
+
+
+def _elite_db_get_validate_pose_quality():
+    try:
+        from javelin_tracker.biomechanics.utils.validation import validate_pose_quality
+    except Exception as exc:  # pragma: no cover - optional heavy deps
+        _fail(
+            "Pose quality validation dependencies are missing. Install `opencv-python` and `mediapipe` to validate.",
+            code=2,
+        )
+        raise typer.Exit(code=2) from exc
+    return validate_pose_quality
+
+
+def _elite_db_load_metadata(csv_path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = list(reader.fieldnames or [])
+        rows = [dict(row) for row in reader]
+    return fieldnames, rows
+
+
+def _elite_db_stable_fieldnames(existing: list[str], rows: list[dict[str, str]]) -> list[str]:
+    fieldnames: list[str] = []
+    for col in REQUIRED_COLUMNS:
+        fieldnames.append(col)
+    if _ELITE_DB_QUALITY_COLUMN not in fieldnames:
+        fieldnames.append(_ELITE_DB_QUALITY_COLUMN)
+
+    for col in existing:
+        if col not in fieldnames:
+            fieldnames.append(col)
+
+    all_keys: set[str] = set()
+    for row in rows:
+        all_keys.update(row.keys())
+    for col in sorted(all_keys):
+        if col not in fieldnames:
+            fieldnames.append(col)
+    return fieldnames
+
+
+def _elite_db_save_metadata(csv_path: Path, existing_fieldnames: list[str], rows: list[dict[str, str]]) -> None:
+    fieldnames = _elite_db_stable_fieldnames(existing_fieldnames, rows)
+    for row in rows:
+        for col in fieldnames:
+            row.setdefault(col, "")
+
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+@elite_db_app.command("process")
+def elite_process(
+    video_path: str = typer.Argument(..., help="Path to the elite video (.mp4)."),
+    thrower_name: Optional[str] = typer.Option(None, "--thrower-name", help="Thrower full name (for metadata/output naming)."),
+    throw_number: Optional[str] = typer.Option(None, "--throw-number", help="Throw number (for metadata/output naming)."),
+    video_id: Optional[str] = typer.Option(None, "--video-id", help="Override output stem (default derived from filename)."),
+    poses_dir: str = typer.Option("data/biomechanics/elite_database/poses", help="Elite poses output directory."),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", help="(Deprecated) Alias for --poses-dir."),
+    metadata_csv: str = typer.Option("data/biomechanics/elite_database/elite_metadata.csv", help="Elite metadata CSV."),
+    log_path: str = typer.Option("data/biomechanics/elite_database/elite_database_qc.log", help="QC/action log file."),
+    register_metadata: bool = typer.Option(
+        True, "--register-metadata/--no-register-metadata", help="Update elite_metadata.csv with processing results."
+    ),
+    copy_to_videos: bool = typer.Option(
+        False,
+        "--copy-to-videos/--no-copy-to-videos",
+        help="Copy the provided video into the elite videos folder when registering metadata.",
+    ),
+    force_reprocess: bool = typer.Option(False, "--force-reprocess", help="Reprocess even if output already exists."),
+    throwing_style: Optional[str] = typer.Option(None, "--throwing-style", help="Set style when registering a new row."),
+    distance_m: Optional[float] = typer.Option(None, "--distance-m", help="Set distance when registering a new row."),
+    date_recorded: Optional[str] = typer.Option(None, "--date-recorded", help="Set date_recorded when registering a new row (YYYY-MM-DD)."),
+    source_url: Optional[str] = typer.Option(None, "--source-url", help="Set source_url when registering a new row."),
+    notes: Optional[str] = typer.Option(None, "--notes", help="Set notes when registering a new row."),
+) -> None:
+    """Process a single elite video through the biomechanics pipeline."""
+    vid_path = Path(video_path)
+    if not vid_path.exists():
+        _fail(f"Video not found: {vid_path}")
+
+    if output_dir and poses_dir == "data/biomechanics/elite_database/poses":
+        poses_dir = output_dir
+        typer.secho("--output-dir is deprecated; use --poses-dir instead.", fg=typer.colors.YELLOW, err=True)
+
+    parsed_name, parsed_number = _elite_db_parse_throw_parts(vid_path.stem)
+    thrower_name = thrower_name or parsed_name
+    throw_number = throw_number or parsed_number
+
+    if video_id:
+        vid_id = _elite_db_slug(video_id)
+    elif thrower_name and throw_number:
+        vid_id = f"{_elite_db_slug(thrower_name)}_{_elite_db_slug(throw_number)}".strip("_")
+    else:
+        vid_id = _elite_db_slug(vid_path.stem)
+        inferred_name, inferred_number = _elite_db_parse_throw_parts(vid_id)
+        thrower_name = thrower_name or inferred_name
+        throw_number = throw_number or inferred_number
+
+    poses_root = Path(poses_dir)
+    poses_root.mkdir(parents=True, exist_ok=True)
+    pose_output = poses_root / f"{vid_id}.json"
+
+    log = _elite_db_configure_logger(Path(log_path))
+    log.info("CLI elite-db process start video=%s video_id=%s", vid_path, vid_id)
+
+    if pose_output.exists() and not force_reprocess:
+        typer.echo(f"Pose already exists at {pose_output}; use --force-reprocess to overwrite.")
+        log.info("Skipping %s (already exists)", pose_output)
+        return
+
+    pipeline = _elite_db_get_pose_pipeline()
+    validate_pose_quality = _elite_db_get_validate_pose_quality()
+
+    try:
+        result = pipeline.process_video(vid_path, vid_id, str(poses_root))  # type: ignore[attr-defined]
+    except Exception as exc:
+        log.exception("Pipeline exception video=%s: %s", vid_path, exc)
+        _fail(f"Processing failed: {exc}")
+
+    if result.get("status") != "success":
+        error = result.get("error") or "unknown error"
+        log.error("Processing failed video=%s status=%s error=%s", vid_path, result.get("status"), error)
+        _fail(f"Processing failed: {error}")
+
+    try:
+        payload = json.loads(Path(result["output_path"]).read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.exception("Failed reading pipeline output %s: %s", result.get("output_path"), exc)
+        _fail(f"Failed to read pipeline output: {exc}")
+
+    try:
+        quality = validate_pose_quality(payload.get("frames", []), payload.get("video_metadata", {}) or {})
+    except Exception as exc:
+        log.exception("Quality validation failed video=%s: %s", vid_path, exc)
+        _fail(f"Quality validation failed: {exc}")
+
+    issues = quality.get("issues")
+    if isinstance(issues, list):
+        for issue in issues:
+            if issue:
+                log.warning("QC issue [%s] %s", vid_id, issue)
+
+    payload["quality"] = quality
+    pose_output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    quality_score = quality.get("quality_score")
+    is_valid = bool(quality.get("is_valid"))
+    if not is_valid:
+        typer.secho(
+            f"Processed {vid_path} -> {pose_output} (quality {quality_score}; flagged for review)",
+            fg=typer.colors.YELLOW,
+        )
+        log.warning("Processed flagged for review video_id=%s quality_score=%s", vid_id, quality_score)
+    else:
+        typer.secho(
+            f"Processed {vid_path} -> {pose_output} (quality {quality_score})",
+            fg=typer.colors.GREEN,
+        )
+        log.info("Processed complete video_id=%s quality_score=%s", vid_id, quality_score)
+
+    if not register_metadata:
+        return
+
+    csv_path = Path(metadata_csv)
+    if not csv_path.exists():
+        typer.secho(
+            f"Metadata CSV not found ({csv_path}); run the initializer and re-run with --register-metadata.",
+            fg=typer.colors.YELLOW,
+        )
+        log.warning("Metadata CSV missing; cannot register results: %s", csv_path)
+        return
+
+    base_dir = csv_path.parent
+    videos_dir = base_dir / "videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+
+    abs_video = vid_path.resolve()
+    relative_video_path: Optional[str] = None
+    try:
+        rel_to_videos = abs_video.relative_to(videos_dir.resolve())
+        relative_video_path = str(Path("videos") / rel_to_videos).replace("\\", "/")
+    except Exception:
+        if copy_to_videos:
+            dest = videos_dir / f"{vid_id}.mp4"
+            if not dest.exists():
+                shutil.copy2(abs_video, dest)
+                log.info("Copied video to %s", dest)
+            relative_video_path = str(Path("videos") / dest.name).replace("\\", "/")
+
+    if relative_video_path is None:
+        typer.secho(
+            "Video is not under the elite videos/ folder, so metadata cannot store a portable relative path. "
+            "Move/copy it under videos/ or re-run with --copy-to-videos.",
+            fg=typer.colors.YELLOW,
+        )
+        log.warning("Cannot register metadata for %s: video not under videos/", abs_video)
+        return
+
+    existing_fieldnames, rows = _elite_db_load_metadata(csv_path)
+    if not all(col in existing_fieldnames for col in REQUIRED_COLUMNS):
+        _fail(
+            f"Invalid elite metadata CSV header; expected {REQUIRED_COLUMNS}. Found={existing_fieldnames}.",
+        )
+
+    target_row: Optional[dict[str, str]] = None
+    for row in rows:
+        if _elite_db_throw_id_from_row(row) == vid_id:
+            target_row = row
+            break
+
+    if target_row is None:
+        if not (thrower_name and throw_number):
+            typer.secho(
+                "Could not infer thrower_name/throw_number for metadata row creation. "
+                "Pass --thrower-name and --throw-number or rename the file to {thrower}_{number}.mp4.",
+                fg=typer.colors.YELLOW,
+            )
+            log.warning("Cannot create metadata row for %s (missing thrower_name/throw_number)", vid_id)
+            return
+        target_row = {col: "" for col in REQUIRED_COLUMNS}
+        target_row["thrower_name"] = thrower_name
+        target_row["throw_number"] = str(throw_number)
+        target_row["distance_m"] = "" if distance_m is None else f"{float(distance_m):.2f}"
+        target_row["throwing_style"] = (throwing_style or "").strip()
+        target_row["video_path"] = relative_video_path
+        target_row["fps"] = ""
+        target_row["date_recorded"] = (date_recorded or "").strip()
+        target_row["source_url"] = (source_url or "").strip()
+        target_row["notes"] = (notes or "").strip()
+        target_row["processed_status"] = "pending"
+        rows.append(target_row)
+        log.info("Appended metadata row for %s", vid_id)
+
+    if not target_row.get("video_path"):
+        target_row["video_path"] = relative_video_path
+    target_row["processed_status"] = "complete"
+    target_row[_ELITE_DB_QUALITY_COLUMN] = "" if quality_score is None else str(quality_score)
+    fps_val = payload.get("video_metadata", {}).get("fps") if isinstance(payload.get("video_metadata"), dict) else None
+    if fps_val and not target_row.get("fps"):
+        target_row["fps"] = str(fps_val)
+
+    if throwing_style and not target_row.get("throwing_style"):
+        target_row["throwing_style"] = throwing_style
+    if distance_m is not None and not target_row.get("distance_m"):
+        target_row["distance_m"] = f"{float(distance_m):.2f}"
+    if date_recorded and not target_row.get("date_recorded"):
+        target_row["date_recorded"] = date_recorded
+    if source_url and not target_row.get("source_url"):
+        target_row["source_url"] = source_url
+    if notes and not target_row.get("notes"):
+        target_row["notes"] = notes
+
+    _elite_db_save_metadata(csv_path, existing_fieldnames, rows)
+    typer.echo(f"Updated metadata row for {vid_id} in {csv_path}")
+    log.info("Updated metadata row for %s", vid_id)
+
+
+@elite_db_app.command("recompute")
+def elite_recompute(
+    poses_dir: str = typer.Option("data/biomechanics/elite_database/poses", help="Directory with pose JSONs."),
+    metadata_csv: str = typer.Option("data/biomechanics/elite_database/elite_metadata.csv", help="Metadata CSV."),
+    output_dir: str = typer.Option(
+        "data/biomechanics/elite_database",
+        help="Where to write reference profiles (overall + per-style).",
+    ),
+    exclusions_path: str = typer.Option(
+        "data/biomechanics/elite_database/exclusions.json",
+        help="Exclusions file used to omit coach-flagged throws.",
+    ),
+    log_path: str = typer.Option("data/biomechanics/elite_database/elite_database_qc.log", help="QC/action log file."),
+) -> None:
+    """Recompute overall and style reference profiles (respecting exclusions)."""
+    log = _elite_db_configure_logger(Path(log_path))
+    log.info("CLI elite-db recompute start poses_dir=%s metadata_csv=%s", poses_dir, metadata_csv)
+
+    profiles = recompute_profiles_after_exclusions(
+        poses_dir=Path(poses_dir),
+        metadata_csv=Path(metadata_csv),
+        output_dir=Path(output_dir),
+        exclusions_path=Path(exclusions_path),
+        log_path=Path(log_path),
+    )
+    overall_samples = int(profiles.get("overall", {}).get("n_samples", 0))
+    styles = sorted([style for style in profiles.keys() if style != "overall"])
+    styles_text = ", ".join(styles) if styles else "none"
+    typer.echo(f"Recomputed profiles: overall={overall_samples} samples; styles={styles_text}")
+    log.info("CLI elite-db recompute done overall=%s styles=%s", overall_samples, styles_text)
+
+
+@elite_db_app.command("list-styles")
+def elite_list_styles(
+    metadata_csv: str = typer.Option("data/biomechanics/elite_database/elite_metadata.csv", help="Metadata CSV."),
+    poses_dir: str = typer.Option("data/biomechanics/elite_database/poses", help="Poses directory."),
+    exclusions_path: str = typer.Option(
+        "data/biomechanics/elite_database/exclusions.json",
+        help="Exclusions file used to omit coach-flagged throws.",
+    ),
+    only_processed: bool = typer.Option(True, "--only-processed/--all", help="Count only processed throws."),
+    log_path: str = typer.Option("data/biomechanics/elite_database/elite_database_qc.log", help="QC/action log file."),
+) -> None:
+    """List available styles and sample counts."""
+    log = _elite_db_configure_logger(Path(log_path))
+    log.info("CLI elite-db list-styles start metadata_csv=%s poses_dir=%s", metadata_csv, poses_dir)
+
+    excluded_ids = set(load_exclusions(Path(exclusions_path)).keys())
+    counts: dict[str, int] = {}
+    total = 0
+
+    with Path(metadata_csv).open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            status = (row.get("processed_status") or "").strip().lower()
+            if only_processed and status != "complete":
+                continue
+            throw_id = _elite_db_throw_id_from_row(row)
+            if throw_id in excluded_ids:
+                continue
+            pose_path = Path(poses_dir) / f"{throw_id}.json"
+            if only_processed and not pose_path.exists():
+                continue
+
+            style = (row.get("throwing_style") or "unknown").strip().lower() or "unknown"
+            counts[style] = counts.get(style, 0) + 1
+            total += 1
+
+    for style in sorted(counts):
+        typer.echo(f"{style}: {counts[style]}")
+    typer.echo(f"overall: {total}")
+    log.info("CLI elite-db list-styles done total=%s styles=%s", total, ",".join(sorted(counts.keys())))
+
+
+@elite_db_app.command("export")
+def elite_export(
+    reference_path: str = typer.Option(
+        "data/biomechanics/elite_database/reference_profile_overall.json", help="Reference profile to export."
+    ),
+    output_path: str = typer.Argument(..., help="Where to save the exported JSON."),
+    log_path: str = typer.Option("data/biomechanics/elite_database/elite_database_qc.log", help="QC/action log file."),
+) -> None:
+    """Export a reference profile JSON to a custom location."""
+    log = _elite_db_configure_logger(Path(log_path))
+    log.info("CLI elite-db export start reference=%s output=%s", reference_path, output_path)
+    ref = json.loads(Path(reference_path).read_text(encoding="utf-8"))
+    Path(output_path).write_text(json.dumps(ref, indent=2), encoding="utf-8")
+    typer.echo(f"Exported profile to {output_path}")
+    log.info("CLI elite-db export done output=%s", output_path)
+
+
+@elite_db_app.command("validate")
+def elite_validate(
+    reference_path: str = typer.Option(
+        "data/biomechanics/elite_database/reference_profile_overall.json", help="Reference profile JSON."
+    ),
+    metadata_csv: str = typer.Option("data/biomechanics/elite_database/elite_metadata.csv", help="Metadata CSV."),
+    poses_dir: str = typer.Option("data/biomechanics/elite_database/poses", help="Poses directory."),
+    exclusions_path: str = typer.Option(
+        "data/biomechanics/elite_database/exclusions.json",
+        help="Exclusions file used to omit coach-flagged throws.",
+    ),
+    log_path: str = typer.Option("data/biomechanics/elite_database/elite_database_qc.log", help="QC/action log file."),
+) -> None:
+    """Run QC checks on reference profiles."""
+    log = _elite_db_configure_logger(Path(log_path))
+    log.info("CLI elite-db validate start reference=%s metadata_csv=%s poses_dir=%s", reference_path, metadata_csv, poses_dir)
+    report = validate_elite_profiles(
+        Path(reference_path),
+        None,
+        poses_dir=Path(poses_dir),
+        metadata_csv=Path(metadata_csv),
+        exclusions_path=Path(exclusions_path),
+        log_path=Path(log_path),
+    )
+    typer.echo(json.dumps(report, indent=2))
+    log.info(
+        "CLI elite-db validate done outliers=%s low_confidence=%s",
+        len(report.get("outliers", [])),
+        len(report.get("low_confidence_metrics", [])),
+    )
+
+
+@elite_db_app.command("exclude")
+def elite_exclude(
+    throw_id: str = typer.Argument(...),
+    reason: str = typer.Argument(...),
+    exclusions_path: str = typer.Option(
+        "data/biomechanics/elite_database/exclusions.json",
+        help="Where to persist excluded throw ids.",
+    ),
+    log_path: str = typer.Option("data/biomechanics/elite_database/elite_database_qc.log", help="QC/action log file."),
+    recompute: bool = typer.Option(
+        False,
+        "--recompute",
+        help="Recompute profiles after exclusion (writes updated reference JSONs).",
+    ),
+    poses_dir: str = typer.Option("data/biomechanics/elite_database/poses", help="Poses directory (for recompute)."),
+    metadata_csv: str = typer.Option("data/biomechanics/elite_database/elite_metadata.csv", help="Metadata CSV (for recompute)."),
+    output_dir: str = typer.Option(
+        "data/biomechanics/elite_database",
+        help="Where to write reference profiles when --recompute is set.",
+    ),
+) -> None:
+    """Exclude a throw from reference calculations."""
+    log = _elite_db_configure_logger(Path(log_path))
+    log.info("CLI elite-db exclude start throw_id=%s", throw_id)
+    confirm = typer.confirm(f"Exclude throw {throw_id} for reason: {reason}?")
+    if not confirm:
+        typer.echo("Aborted.")
+        raise typer.Exit(code=1)
+    exclude_throw(throw_id, reason, exclusions_path=Path(exclusions_path), log_path=Path(log_path))
+    typer.echo(f"Excluded {throw_id}")
+    log.info("CLI elite-db exclude done throw_id=%s", throw_id)
+    if recompute:
+        recompute_profiles_after_exclusions(
+            poses_dir=Path(poses_dir),
+            metadata_csv=Path(metadata_csv),
+            output_dir=Path(output_dir),
+            exclusions_path=Path(exclusions_path),
+            log_path=Path(log_path),
+        )
+        typer.echo("Recomputed profiles after exclusion.")
+
+
+@biomechanics_app.command("info")
+def biomechanics_info(show_config: bool = typer.Option(False, "--config", help="Print biomechanics config.")) -> None:
+    """
+    Display available biomechanics capabilities and optional config details.
+
+    Example:
+        javelin biomechanics info --config
+    """
+    typer.echo("Biomechanics module available: pose detection, video utilities, config.")
+    typer.echo("Key imports: PoseDetector, extract_frames, get_video_metadata, validate_video_readable.")
+    if show_config:
+        biomechanics.print_config()
+
+
+app.add_typer(biomechanics_app, name="biomechanics", help="Biomechanics tools (pose, video, config).")
+app.add_typer(elite_db_app, name="elite-db", help="Elite database tools (processing, profiles, QC).")
 
 
 def main() -> None:

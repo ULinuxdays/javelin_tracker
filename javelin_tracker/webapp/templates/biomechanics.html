@@ -1,0 +1,84 @@
+{% extends "app_base.html" %}
+
+{% block extra_head %}
+  {{ super() }}
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin="anonymous"></script>
+{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h3>Biomechanics</h3>
+      <p class="muted">Drag a video, run pose + metrics, then review angles, issues, and coaching cues.</p>
+    </div>
+  </header>
+
+  <div class="biomech-lab-grid">
+    <div class="subpanel">
+      <p class="section-label">Athlete details</p>
+      <div class="biomech-lab-row">
+        <label class="input-label flex-1">
+          Athlete
+          <input id="biomechLabAthlete" class="input" list="athleteOptions" placeholder="Start typing a name…" />
+        </label>
+        <label class="input-label">
+          Date
+          <input id="biomechLabDate" class="input" type="date" />
+        </label>
+        <label class="input-label">
+          Best (m)
+          <input id="biomechLabBest" class="input" type="number" step="0.01" min="0" placeholder="0 (optional)" />
+        </label>
+      </div>
+      <p class="muted small">Tip: leave Best blank if unknown — you can edit the session later.</p>
+    </div>
+
+    <div class="subpanel">
+      <p class="section-label">Video</p>
+      <div id="biomechDropzone" class="dropzone" tabindex="0" role="button" aria-label="Drop a video to analyze">
+        <div class="dropzone__inner">
+          <p class="dropzone__title">Drag &amp; drop a video</p>
+          <p class="muted small">or</p>
+          <button type="button" class="btn btn-soft" id="biomechBrowseButton">Browse files</button>
+          <input type="file" id="biomechFileInput" accept="video/*" hidden />
+          <p class="muted small">mp4, mov, avi, mkv · max 100MB</p>
+          <p class="muted small" id="biomechSelectedFile">No file selected.</p>
+        </div>
+      </div>
+
+      <div class="biomech-lab-actions">
+        <button type="button" class="btn btn-primary" id="biomechAnalyzeButton" disabled>Analyze</button>
+        <button type="button" class="btn btn-ghost" id="biomechResetButton" disabled>Reset</button>
+        <span class="muted small" id="biomechSessionLink"></span>
+      </div>
+
+      <div id="biomechLabProgress" class="biomech-lab-progress" style="display: none;">
+        <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-bar__fill" id="biomechLabProgressFill" style="width: 0%;"></div>
+        </div>
+        <p class="muted small" id="biomechLabStatus">Ready.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="biomechResultsPanel" style="display: none;">
+  <header class="panel-header">
+    <div>
+      <h3>Analysis</h3>
+      <p class="muted small">Progress and results appear here once the upload starts.</p>
+    </div>
+  </header>
+
+  <div id="biomechanicsViewerRoot" data-session-id="" data-athlete-name=""></div>
+  <noscript>
+    <div class="panel-note muted small">Enable JavaScript to view biomechanics charts and video overlay.</div>
+  </noscript>
+</section>
+
+<script type="text/babel" data-presets="env,react" src="{{ url_for('biomechanics_viewer_frontend') }}"></script>
+{% endblock %}

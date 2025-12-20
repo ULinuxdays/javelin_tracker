@@ -21,6 +21,7 @@ const controllers = {
   dashboard: initDashboard,
   sessions: initSessions,
   logs: initLogs,
+  biomechanics: initBiomechanicsLab,
   analytics: initAnalytics,
   athletes: initAthletes,
   throwai: initTraining,
@@ -576,6 +577,359 @@ async function initReports() {
   }
 }
 
+async function initBiomechanicsLab() {
+  await Promise.all([ensureAthletes()]);
+
+  const dropzone = document.getElementById('biomechDropzone');
+  const browseButton = document.getElementById('biomechBrowseButton');
+  const fileInput = document.getElementById('biomechFileInput');
+  const analyzeButton = document.getElementById('biomechAnalyzeButton');
+  const resetButton = document.getElementById('biomechResetButton');
+  const athleteInput = document.getElementById('biomechLabAthlete');
+  const dateInput = document.getElementById('biomechLabDate');
+  const bestInput = document.getElementById('biomechLabBest');
+  const selectedFileLabel = document.getElementById('biomechSelectedFile');
+  const sessionLink = document.getElementById('biomechSessionLink');
+  const resultsPanel = document.getElementById('biomechResultsPanel');
+  const viewerRoot = document.getElementById('biomechanicsViewerRoot');
+  const progressPanel = document.getElementById('biomechLabProgress');
+  const progressFill = document.getElementById('biomechLabProgressFill');
+  const progressStatus = document.getElementById('biomechLabStatus');
+
+  if (!dropzone || !fileInput || !analyzeButton || !resetButton || !athleteInput || !dateInput || !selectedFileLabel) {
+    return;
+  }
+
+  const defaultAnalyzeLabel = analyzeButton.textContent || 'Analyze';
+
+  if (dateInput && !dateInput.value) {
+    const today = new Date();
+    dateInput.value = formatInputDate(today);
+  }
+
+  let selectedFile = null;
+  let busy = false;
+  let currentSessionId = null;
+  let progressTimer = null;
+
+  function clearProgressTimer() {
+    if (progressTimer) {
+      window.clearInterval(progressTimer);
+      progressTimer = null;
+    }
+  }
+
+  function setProgress(message, percent) {
+    if (!progressPanel || !progressFill || !progressStatus) {
+      return;
+    }
+    progressPanel.style.display = 'block';
+    if (message) {
+      progressStatus.textContent = message;
+    }
+    const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+    progressFill.style.width = `${pct}%`;
+    const bar = progressPanel.querySelector('.progress-bar');
+    if (bar) {
+      bar.setAttribute('aria-valuenow', String(pct));
+    }
+  }
+
+  function hideProgress() {
+    if (!progressPanel || !progressFill || !progressStatus) {
+      return;
+    }
+    progressPanel.style.display = 'none';
+    progressFill.style.width = '0%';
+    progressStatus.textContent = 'Ready.';
+    const bar = progressPanel.querySelector('.progress-bar');
+    if (bar) {
+      bar.setAttribute('aria-valuenow', '0');
+    }
+  }
+
+  function updateControls() {
+    const fileOk = Boolean(selectedFile);
+    analyzeButton.disabled = busy || !fileOk;
+    resetButton.disabled = busy || (!selectedFile && !currentSessionId);
+    analyzeButton.textContent = busy ? 'Analyzing…' : defaultAnalyzeLabel;
+  }
+
+  function setSelectedFile(file) {
+    selectedFile = file || null;
+    if (!selectedFile) {
+      selectedFileLabel.textContent = 'No file selected.';
+      return;
+    }
+    const sizeMb = selectedFile.size ? selectedFile.size / (1024 * 1024) : 0;
+    selectedFileLabel.textContent = `${selectedFile.name} (${formatNumber(sizeMb, 1)} MB)`;
+  }
+
+  function resetUi() {
+    clearProgressTimer();
+    busy = false;
+    selectedFile = null;
+    currentSessionId = null;
+    setSelectedFile(null);
+    fileInput.value = '';
+    hideProgress();
+    if (sessionLink) sessionLink.innerHTML = '';
+    if (resultsPanel) resultsPanel.style.display = 'none';
+    if (viewerRoot) {
+      viewerRoot.dataset.sessionId = '';
+      viewerRoot.dataset.athleteName = '';
+      if (window.BiomechanicsViewer && typeof window.BiomechanicsViewer.unmount === 'function') {
+        window.BiomechanicsViewer.unmount(viewerRoot);
+      } else {
+        viewerRoot.innerHTML = '';
+      }
+    }
+    updateControls();
+  }
+
+  function isSupportedVideo(file) {
+    const name = String(file?.name || '').toLowerCase();
+    return name.endsWith('.mp4') || name.endsWith('.mov') || name.endsWith('.avi') || name.endsWith('.mkv');
+  }
+
+  function uploadWithProgress(url, formData, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      xhr.responseType = 'json';
+
+      xhr.upload.addEventListener('progress', (event) => {
+        if (!event.lengthComputable) return;
+        const ratio = event.total > 0 ? event.loaded / event.total : 0;
+        if (typeof onProgress === 'function') {
+          onProgress(Math.max(0, Math.min(1, ratio)));
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        const status = xhr.status;
+        const payload = xhr.response || null;
+        if (status >= 200 && status < 300) {
+          resolve(payload);
+          return;
+        }
+        reject(new Error(payload?.error || 'Unable to upload video.'));
+      });
+
+      xhr.addEventListener('error', () => {
+        reject(new Error('Network error while uploading video.'));
+      });
+
+      xhr.send(formData);
+    });
+  }
+
+  function startProgressPolling(sessionId) {
+    clearProgressTimer();
+
+    const tick = async () => {
+      try {
+        const response = await fetch(`/api/sessions/${sessionId}/biomechanics/progress`);
+        const data = await response.json();
+        if (!response.ok) {
+          return;
+        }
+
+        const pctRaw = Number(data?.percent_complete);
+        const pct = Number.isFinite(pctRaw) ? Math.max(0, Math.min(100, pctRaw)) : 0;
+        const status = String(data?.status || '').toLowerCase();
+
+        const mapped = 35 + (pct / 100) * 65;
+        const label =
+          status === 'complete'
+            ? 'Complete.'
+            : status === 'error'
+              ? 'Failed.'
+              : `Processing… ${pct.toFixed(0)}%`;
+        setProgress(label, status === 'complete' ? 100 : mapped);
+
+        if (status === 'complete') {
+          clearProgressTimer();
+          busy = false;
+          updateControls();
+          showToast('Biomechanics analysis complete.', 'success');
+        }
+
+        if (status === 'error') {
+          clearProgressTimer();
+          busy = false;
+          updateControls();
+          const msg = data?.error_message || 'Biomechanics processing failed.';
+          showToast(msg, 'error');
+          setProgress(`Failed: ${msg}`, 100);
+        }
+      } catch (err) {
+        // Ignore transient poll errors.
+      }
+    };
+
+    // Kick once immediately, then poll.
+    tick();
+    progressTimer = window.setInterval(tick, 1500);
+  }
+
+  async function startAnalysis() {
+    if (busy) return;
+
+    if (!selectedFile) {
+      showToast('Drop a video file first.', 'error');
+      return;
+    }
+    if (!isSupportedVideo(selectedFile)) {
+      showToast('Unsupported file type. Use mp4/mov/avi/mkv.', 'error');
+      return;
+    }
+    if (selectedFile.size > 100 * 1024 * 1024) {
+      showToast('File too large (max 100MB).', 'error');
+      return;
+    }
+
+    const athleteName = (athleteInput.value || '').trim() || 'unassigned';
+
+    busy = true;
+    updateControls();
+    clearProgressTimer();
+    setProgress('Creating session…', 5);
+
+    try {
+      sessionLink && (sessionLink.textContent = 'Creating session…');
+      const dateValue = (dateInput.value || '').trim();
+      const bestRaw = bestInput ? (bestInput.value || '').trim() : '';
+      const best = bestRaw ? Number(bestRaw) : 0;
+      const payload = {
+        athlete: athleteName,
+        date: dateValue || undefined,
+        event: 'javelin',
+        best: Number.isFinite(best) ? best : 0,
+        throws: null,
+        rpe: null,
+        duration_minutes: 0,
+        tags: 'biomechanics',
+        notes: 'Biomechanics video analysis session.',
+      };
+
+      const sessionResp = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const sessionData = await sessionResp.json();
+      if (!sessionResp.ok) {
+        throw new Error(sessionData.error || 'Unable to create session.');
+      }
+      const session = sessionData.session || {};
+      const sessionId = String(session.id || '');
+      if (!sessionId) {
+        throw new Error('Session id missing from server response.');
+      }
+      currentSessionId = sessionId;
+
+      sessionLink &&
+        (sessionLink.innerHTML = `Session <a href="/sessions/${sessionId}">${sessionId}</a> · Uploading video…`);
+      setProgress('Uploading video…', 15);
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      await uploadWithProgress(`/api/sessions/${sessionId}/upload-video`, formData, (ratio) => {
+        const pct = 15 + ratio * 20;
+        setProgress('Uploading video…', pct);
+      });
+
+      showToast('Video uploaded. Biomechanics processing started.', 'success');
+      sessionLink &&
+        (sessionLink.innerHTML = `Processing… <a href="/sessions/${sessionId}">Open session details</a>`);
+      setProgress('Processing video…', 35);
+
+      if (resultsPanel) resultsPanel.style.display = 'block';
+      if (viewerRoot) {
+        viewerRoot.dataset.sessionId = sessionId;
+        viewerRoot.dataset.athleteName = athleteName;
+        if (window.BiomechanicsViewer && typeof window.BiomechanicsViewer.mount === 'function') {
+          window.BiomechanicsViewer.mount(viewerRoot, { sessionId, athleteName });
+        }
+      }
+
+      resultsPanel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      startProgressPolling(sessionId);
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || 'Unable to start biomechanics analysis.', 'error');
+      sessionLink && (sessionLink.textContent = '');
+      setProgress(`Error: ${error.message || 'Unable to start.'}`, 100);
+      busy = false;
+      updateControls();
+    }
+  }
+
+  function pickFile() {
+    fileInput.click();
+  }
+
+  browseButton?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    pickFile();
+  });
+  dropzone.addEventListener('click', pickFile);
+  dropzone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      pickFile();
+    }
+  });
+
+  athleteInput.addEventListener('input', updateControls);
+  dateInput.addEventListener('change', updateControls);
+  bestInput?.addEventListener('input', updateControls);
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files && fileInput.files.length ? fileInput.files[0] : null;
+    setSelectedFile(file);
+    updateControls();
+  });
+
+  analyzeButton.addEventListener('click', startAnalysis);
+  resetButton.addEventListener('click', resetUi);
+
+  const prevent = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  dropzone.addEventListener('dragenter', (event) => {
+    prevent(event);
+    dropzone.classList.add('is-dragover');
+  });
+  dropzone.addEventListener('dragover', (event) => {
+    prevent(event);
+    dropzone.classList.add('is-dragover');
+  });
+  dropzone.addEventListener('dragleave', (event) => {
+    prevent(event);
+    dropzone.classList.remove('is-dragover');
+  });
+  dropzone.addEventListener('drop', (event) => {
+    prevent(event);
+    dropzone.classList.remove('is-dragover');
+    const file =
+      event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length
+        ? event.dataTransfer.files[0]
+        : null;
+    if (!file) return;
+    setSelectedFile(file);
+    updateControls();
+  });
+
+  hideProgress();
+  updateControls();
+}
+
 async function initWeightRoom() {
   await Promise.all([ensureAthletes(), loadSessions(), loadStrengthLogs(), ensureTeams()]);
 }
@@ -1092,6 +1446,11 @@ function renderSessionsTable() {
       const tags = (session.tags || []).join(', ');
       const volume = session.throws?.length || 0;
       const rpe = session.rpe ?? '—';
+      const biomechRaw = (session.biomechanics_status || '').toString().trim().toLowerCase();
+      const biomechLabel = biomechRaw ? biomechRaw[0].toUpperCase() + biomechRaw.slice(1) : '—';
+      const biomechCell = session.id
+        ? `<a class="table-action ghost" href="/sessions/${session.id}">${biomechLabel}</a>`
+        : biomechLabel;
       return `
         <tr>
           <td data-label="Date">${session.date}</td>
@@ -1103,12 +1462,13 @@ function renderSessionsTable() {
           <td data-label="RPE">${rpe}</td>
           <td data-label="Tags">${tags || '—'}</td>
           <td data-label="Load">${formatNumber(session.load, 1)} AU</td>
+          <td data-label="Biomechanics">${biomechCell}</td>
           ${actionCell}
         </tr>
       `;
     });
   if (!rows.length) {
-    const span = deletable ? 10 : 9;
+    const span = deletable ? 11 : 10;
     table.innerHTML = `<tr><td colspan="${span}">No sessions match your search.</td></tr>`;
   } else {
     table.innerHTML = rows.join('');

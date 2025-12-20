@@ -16,6 +16,7 @@ Note: The CLI binary is available as both `javelin` and `throws`. The web app li
 - Session-RPE workload plus ACWR (rolling and EWMA) and PB flags
 - Multi-athlete workflows with teams and role-based scoping (head coach, assistants)
 - Web app: dashboard + analytics with load/readiness tooltips, fast session logging with templates, team-aware logs, weight room planner/logs, ThrowAI forecasts with explanations, reports UI, privacy/help pages
+- Biomechanics video analysis (experimental): drag & drop upload, pose + kinematic metrics, elite reference comparisons, coaching cues
 - Exports with provenance (CSV, Parquet, JSON + metadata); weekly PDF reports
 - Import/migration for legacy logs; deterministic demo datasets; CSV roster/session import
 - Optional SQLite-backed athlete profile, strength logs, and metric forecasting
@@ -66,6 +67,13 @@ Bootstrap a sandbox dataset with:
 ```bash
 python -m javelin_tracker seed --source demo/demo_sessions.json --force
 ```
+
+## Biomechanics (video analysis, experimental)
+
+- Web app: open `/biomechanics` for drag & drop analysis, or open a session detail and click “View Biomechanics”.
+- Install pose deps: `pip install -r requirements.txt` (includes `opencv-python` + `mediapipe`).
+- Dev run (hot reload) on port 5001: `THROWS_TRACKER_POSE_TIME_SCALE=0.25 FLASK_DEBUG=1 PORT=5001 .venv/bin/python -m javelin_tracker.webapp`
+- Tracking quality knobs: `THROWS_TRACKER_POSE_LANDMARKER_MODEL_VARIANT=heavy|full|lite`, `THROWS_TRACKER_POSE_TIME_SCALE`, `THROWS_TRACKER_POSE_ASSUMED_FPS`.
 
 ## Web app deployment (coaches/programs)
 

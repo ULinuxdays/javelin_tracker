@@ -54,22 +54,23 @@
               <th>Event</th>
               <th>Best distance (m)</th>
               <th>Volume (throws)</th>
-              <th>RPE (1–10)</th>
-              <th>Tags</th>
-              <th>Load (AU)</th>
-              <th></th>
-            </tr>
-          </thead>
-        <tbody id="sessionsTable">
-          <tr><td colspan="10">
-            <div class="panel-note">
-              <p class="section-label">No sessions yet</p>
-              <p class="muted small">Log your first session to see it here.</p>
-              <a class="btn btn-soft" href="{{ url_for('sessions_page') }}">Log session</a>
-            </div>
-          </td></tr>
-        </tbody>
-      </table>
+	              <th>RPE (1–10)</th>
+	              <th>Tags</th>
+	              <th>Load (AU)</th>
+	              <th>Biomechanics</th>
+	              <th></th>
+	            </tr>
+	          </thead>
+	        <tbody id="sessionsTable">
+	          <tr><td colspan="11">
+	            <div class="panel-note">
+	              <p class="section-label">No sessions yet</p>
+	              <p class="muted small">Log your first session to see it here.</p>
+	              <a class="btn btn-soft" href="{{ url_for('sessions_page') }}">Log session</a>
+	            </div>
+	          </td></tr>
+	        </tbody>
+	      </table>
     </div>
       <div class="panel-subtitle">Recent cards</div>
       <div id="sessionTimeline" class="timeline-grid"></div>

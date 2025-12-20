@@ -25,7 +25,7 @@ from .models import (
 )
 DEFAULT_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DEFAULT_DB_FILENAME = "throws_tracker.db"
-_DB_INITIALISED = False
+_DB_INITIALISED_FOR: Path | None = None
 LOGGER = logging.getLogger(__name__)
 
 
@@ -47,6 +47,37 @@ def _sessions_file() -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         return target
     return _data_dir() / "sessions.json"
+
+
+def _save_sessions_to_file(sessions_file: Path, sessions: Iterable[Any]) -> None:
+    sessions_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(list(sessions), indent=2, sort_keys=True) + "\n"
+
+    with NamedTemporaryFile("w", dir=sessions_file.parent, delete=False, encoding="utf-8") as tmp:
+        tmp.write(payload)
+        temp_path = Path(tmp.name)
+    temp_path.replace(sessions_file)
+
+
+def _load_sessions_from_file(sessions_file: Path) -> List[Any]:
+    if not sessions_file.exists():
+        sessions_file.parent.mkdir(parents=True, exist_ok=True)
+        sessions_file.write_text("[]\n", encoding="utf-8")
+        return []
+
+    raw = sessions_file.read_text(encoding="utf-8").strip() or "[]"
+    try:
+        sessions = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Could not parse {sessions_file}: {exc}") from exc
+
+    if not isinstance(sessions, list):
+        raise ValueError(f"{sessions_file} must contain a JSON list")
+
+    upgraded, changed = _migrate_sessions(sessions)
+    if changed:
+        _save_sessions_to_file(sessions_file, upgraded)
+    return upgraded
 
 
 def _database_file() -> Path:
@@ -71,30 +102,19 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, alter_sql:
 
 
 def load_sessions() -> List[Any]:
-    sessions_file = _sessions_file()
-    if not sessions_file.exists():
-        sessions_file.write_text("[]\n", encoding="utf-8")
-        return []
-
-    raw = sessions_file.read_text(encoding="utf-8").strip() or "[]"
-    try:
-        sessions = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Could not parse {sessions_file}: {exc}") from exc
-
-    if not isinstance(sessions, list):
-        raise ValueError(f"{sessions_file} must contain a JSON list")
-    upgraded, changed = _migrate_sessions(sessions)
-    if changed:
-        save_sessions(upgraded)
-    return upgraded
+    return _load_sessions_from_file(_sessions_file())
 
 
 def _ensure_database() -> None:
-    global _DB_INITIALISED
-    if _DB_INITIALISED:
-        return
+    global _DB_INITIALISED_FOR
     db_path = _database_file()
+    if _DB_INITIALISED_FOR is not None:
+        try:
+            if Path(_DB_INITIALISED_FOR).resolve() == db_path.resolve():
+                return
+        except Exception:
+            if Path(_DB_INITIALISED_FOR) == db_path:
+                return
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(
@@ -115,6 +135,7 @@ def _ensure_database() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 team_id INTEGER,
+                throwing_style TEXT,
                 height_cm REAL,
                 weight_kg REAL,
                 bmi REAL,
@@ -165,23 +186,120 @@ def _ensure_database() -> None:
             """
         )
         _ensure_column(conn, "Athletes", "team_id", "ALTER TABLE Athletes ADD COLUMN team_id INTEGER")
+        _ensure_column(conn, "Athletes", "throwing_style", "ALTER TABLE Athletes ADD COLUMN throwing_style TEXT")
         _ensure_column(conn, "StrengthLogs", "team_id", "ALTER TABLE StrengthLogs ADD COLUMN team_id INTEGER")
     finally:
         conn.close()
-    _DB_INITIALISED = True
+    _DB_INITIALISED_FOR = db_path
 
 
 def save_sessions(sessions: Iterable[Any]) -> None:
-    sessions_file = _sessions_file()
-    sessions_file.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(list(sessions), indent=2, sort_keys=True) + "\n"
+    _save_sessions_to_file(_sessions_file(), sessions)
 
-    with NamedTemporaryFile(
-        "w", dir=sessions_file.parent, delete=False, encoding="utf-8"
-    ) as tmp:
-        tmp.write(payload)
-        temp_path = Path(tmp.name)
-    temp_path.replace(sessions_file)
+
+def get_session_by_id(session_id: str, *, sessions_file: Path | str | None = None) -> dict[str, Any] | None:
+    """Return a session record matching `id` or None when missing."""
+    if not session_id:
+        return None
+    path = Path(sessions_file).expanduser() if sessions_file is not None else _sessions_file()
+    sessions = _load_sessions_from_file(path) if sessions_file is not None else load_sessions()
+    for record in sessions:
+        if isinstance(record, dict) and str(record.get("id")) == str(session_id):
+            return dict(record)
+    return None
+
+
+def update_session_by_id(
+    session_id: str,
+    patch: Mapping[str, Any],
+    *,
+    sessions_file: Path | str | None = None,
+) -> dict[str, Any] | None:
+    """Update a session record in place and persist changes."""
+    if not session_id:
+        return None
+    path = Path(sessions_file).expanduser() if sessions_file is not None else _sessions_file()
+    sessions = _load_sessions_from_file(path) if sessions_file is not None else load_sessions()
+
+    updated: dict[str, Any] | None = None
+    for record in sessions:
+        if not isinstance(record, dict) or str(record.get("id")) != str(session_id):
+            continue
+        record.update(dict(patch))
+        updated = dict(record)
+        break
+
+    if updated is None:
+        return None
+
+    if sessions_file is not None:
+        _save_sessions_to_file(path, sessions)
+    else:
+        save_sessions(sessions)
+    return updated
+
+
+def _project_root() -> Path:
+    return DEFAULT_DATA_DIR.parent
+
+
+def _resolve_project_path(path: str | Path) -> Path:
+    p = path if isinstance(path, Path) else Path(path)
+    return p if p.is_absolute() else _project_root() / p
+
+
+def get_session_biomechanics(session_id: str, *, sessions_file: Path | str | None = None) -> dict[str, Any] | None:
+    """Load biomechanics artifacts (metrics, report, feedback) for a session."""
+    session = get_session_by_id(session_id, sessions_file=sessions_file)
+    if session is None:
+        return None
+
+    raw_path = session.get("biomechanics_result_path")
+    metrics_path: Path
+    if isinstance(raw_path, str) and raw_path.strip():
+        metrics_path = _resolve_project_path(raw_path.strip())
+    else:
+        metrics_path = _project_root() / "data" / "biomechanics" / "sessions" / str(session_id) / "metrics.json"
+
+    output: dict[str, Any] = {
+        "session_id": str(session_id),
+        "video_id": session.get("video_id"),
+        "biomechanics_analysis_id": session.get("biomechanics_analysis_id"),
+        "biomechanics_status": session.get("biomechanics_status"),
+        "biomechanics_timestamp": session.get("biomechanics_timestamp"),
+        "biomechanics_result_path": str(metrics_path) if metrics_path else None,
+        "metrics": None,
+        "comparison_report": None,
+        "feedback": None,
+        "errors": [],
+    }
+
+    def _try_load_json(path: Path) -> Any:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    if metrics_path.exists():
+        try:
+            output["metrics"] = _try_load_json(metrics_path)
+        except Exception as exc:
+            output["errors"].append(f"metrics: {exc}")
+    else:
+        output["errors"].append(f"metrics_missing: {metrics_path}")
+
+    report_path = metrics_path.with_name("comparison_report.json")
+    if report_path.exists():
+        try:
+            output["comparison_report"] = _try_load_json(report_path)
+        except Exception as exc:
+            output["errors"].append(f"comparison_report: {exc}")
+
+    feedback_path = metrics_path.with_name("feedback.json")
+    if feedback_path.exists():
+        try:
+            output["feedback"] = _try_load_json(feedback_path)
+        except Exception as exc:
+            output["errors"].append(f"feedback: {exc}")
+
+    return output
 
 
 def append_session(session: Any) -> List[Any]:
@@ -1688,5 +1806,16 @@ def _migrate_record(record: dict[str, Any]) -> Tuple[dict[str, Any], bool]:
     if schema_raw != schema_value:
         upgraded["schema_version"] = schema_value
         mutated = True
+
+    for key in (
+        "video_id",
+        "biomechanics_analysis_id",
+        "biomechanics_status",
+        "biomechanics_timestamp",
+        "biomechanics_result_path",
+    ):
+        if key not in upgraded:
+            upgraded[key] = None
+            mutated = True
 
     return upgraded, mutated

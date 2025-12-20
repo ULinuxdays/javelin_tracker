@@ -15,6 +15,7 @@ from datetime import timedelta as datetime_timedelta
 
 from flask import (
     Flask,
+    abort,
     g,
     jsonify,
     redirect,
@@ -30,6 +31,7 @@ from ..reports import generate_weekly_report
 from ..constants import DEFAULT_ATHLETE_PLACEHOLDER
 from ..env import LEGACY_PREFIX, PRIMARY_PREFIX
 from ..models import DEFAULT_EVENT
+from .routes_biomechanics import register_biomechanics_api
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 WEBAPP_DATA = BASE_DIR / "data" / "webapp"
@@ -183,10 +185,32 @@ def register_routes(app: Flask) -> None:
     def sessions_page():
         return render_template("sessions.html", page_slug="sessions")
 
+    @app.route("/sessions/<session_id>")
+    @login_required
+    def session_detail_page(session_id: str):
+        sessions = _load_sessions(g.user["id"])
+        record = next((row for row in sessions if str(row.get("id")) == str(session_id)), None)
+        if not record:
+            abort(404)
+        sessions_file = WEBAPP_DATA / "userspace" / g.user["id"] / "sessions.json"
+        biomechanics = storage.get_session_biomechanics(session_id, sessions_file=sessions_file) or {}
+        return render_template(
+            "session_detail.html",
+            page_slug="sessions",
+            page_title="Session details",
+            session_record=record,
+            biomechanics=biomechanics,
+        )
+
     @app.route("/logs")
     @login_required
     def logs_page():
         return render_template("logs.html", page_slug="logs")
+
+    @app.route("/biomechanics")
+    @login_required
+    def biomechanics_page():
+        return render_template("biomechanics.html", page_slug="biomechanics", page_title="Biomechanics")
 
     @app.route("/analytics")
     @login_required
@@ -233,6 +257,8 @@ def register_routes(app: Flask) -> None:
 
 
 def register_api(app: Flask) -> None:
+    register_biomechanics_api(app)
+
     @app.get("/api/sessions")
     @login_required
     def api_sessions():
@@ -748,15 +774,21 @@ def _list_athletes(user_id: str, *, include_profile: bool = False) -> list[dict[
     with storage.open_database(readonly=True) as conn:
         rows = conn.execute(
             """
-            SELECT a.id, a.name, a.height_cm, a.weight_kg, a.strength_benchmarks, a.notes, a.team_id, t.name
+            SELECT a.id, a.name, a.height_cm, a.weight_kg, a.strength_benchmarks, a.notes, a.throwing_style, a.team_id, t.name
             FROM Athletes a
             LEFT JOIN Teams t ON a.team_id = t.id
             ORDER BY a.name
             """
         ).fetchall()
         for row in rows:
-            athlete_id, name, height, weight, benchmarks_json, notes, team_id, team_name = row
-            entry: dict[str, Any] = {"id": athlete_id, "name": name, "team_id": team_id, "team": team_name}
+            athlete_id, name, height, weight, benchmarks_json, notes, throwing_style, team_id, team_name = row
+            entry: dict[str, Any] = {
+                "id": athlete_id,
+                "name": name,
+                "team_id": team_id,
+                "team": team_name,
+                "throwing_style": throwing_style,
+            }
             if include_profile:
                 entry.update(
                     {
@@ -776,15 +808,16 @@ def _fetch_athlete_profile(user_id: str, athlete_id: int) -> dict[str, Any] | No
     _set_user_env(user_id)
     with storage.open_database(readonly=True) as conn:
         row = conn.execute(
-            "SELECT id, name, height_cm, weight_kg, strength_benchmarks, notes FROM Athletes WHERE id = ?",
+            "SELECT id, name, throwing_style, height_cm, weight_kg, strength_benchmarks, notes FROM Athletes WHERE id = ?",
             (athlete_id,),
         ).fetchone()
         if not row:
             return None
-        athlete_id, name, height, weight, benchmarks_json, notes = row
+        athlete_id, name, throwing_style, height, weight, benchmarks_json, notes = row
         profile = {
             "id": athlete_id,
             "name": name,
+            "throwing_style": throwing_style,
             "height_cm": height,
             "weight_kg": weight,
             "bench_1rm_kg": _coerce_benchmark(benchmarks_json, "bench press"),
